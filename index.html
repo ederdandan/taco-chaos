@@ -259,6 +259,11 @@
     <!-- Floating Stickers & Meme Animations Container -->
     <div id="floating-effects-layer" class="absolute inset-0 pointer-events-none z-40 overflow-hidden"></div>
 
+    <!-- Toast global (visível em qualquer aba) -->
+    <div id="arena-toast" class="absolute top-[112px] left-1/2 -translate-x-1/2 z-[60] pointer-events-none opacity-0 transition-opacity duration-200 bg-void/95 border-2 border-electric text-white px-3 py-1 rounded-full text-xs font-extrabold shadow-lg text-center w-max max-w-[92%]">
+      Mensagem de status
+    </div>
+
     <!-- ===================================================================== -->
     <!-- VIEW 1: JOGAR (SOLO OU MULTIPLAYER ATÉ 6 PESSOAS)                      -->
     <!-- ===================================================================== -->
@@ -289,11 +294,6 @@
       <!-- CENTER ARENA: TAPPABLE PILE + GESTURE CHALLENGE -->
       <div class="relative flex-1 flex flex-col items-center justify-center my-1 min-h-[200px]">
         
-        <!-- Dynamic Toast -->
-        <div id="arena-toast" class="absolute -top-1 z-30 pointer-events-none opacity-0 transition-all duration-200 bg-void/95 border-2 border-electric text-white px-3 py-1 rounded-full text-xs font-extrabold shadow-lg text-center max-w-[92%]">
-          Mensagem de status
-        </div>
-
         <!-- Special Gesture Prompt Banner -->
         <div id="gesture-prompt" class="hidden absolute top-1 z-30 bg-violet text-white border-2 border-white px-3 py-1.5 rounded-2xl shadow-xl flex items-center gap-2 animate-bounce">
           <span id="gesture-icon" class="text-base">🦍</span>
@@ -305,7 +305,7 @@
         </div>
 
         <!-- Tappable Card Pile Target -->
-        <div id="center-pile-zone" class="relative w-48 h-60 sm:w-52 sm:h-64 flex items-center justify-center cursor-pointer touch-manipulation">
+        <div id="center-pile-zone" class="relative w-48 h-60 sm:w-52 sm:h-64 flex items-center justify-center cursor-pointer" style="touch-action: none;">
           
           <!-- Ambient Target Ring -->
           <div id="target-ring" class="absolute inset-0 rounded-[30px] border-2 border-dashed border-slate-700/80 flex flex-col items-center justify-center pointer-events-none transition-colors">
@@ -441,6 +441,15 @@
           <button onclick="joinP2PRoom()" class="px-3.5 py-2 rounded-xl bg-electric text-void font-display font-bold text-xs neo-shadow-sm neo-active hover:brightness-110">
             ENTRAR
           </button>
+        </div>
+
+        <!-- Voltar à última sala (até 15 min depois de sair/cair) -->
+        <div id="lobby-rejoin" class="hidden bg-surface border border-cyan/60 rounded-2xl p-2.5 flex items-center justify-between">
+          <div class="text-left">
+            <div class="font-display font-bold text-xs text-white">Última sala: <span id="lobby-rejoin-code" class="text-cyan tracking-widest">-----</span></div>
+            <div class="text-[10px] text-slate-400">Caiu? Volte e reassuma sua vaga.</div>
+          </div>
+          <button onclick="rejoinLastRoom()" class="px-3 py-1.5 rounded-xl bg-cyan text-white text-xs font-bold neo-shadow-sm neo-active">Reconectar</button>
         </div>
 
         <!-- Quick Solo Mode Option (Only shown when not in a room) -->
@@ -686,6 +695,10 @@
             <strong class="text-coral block mb-0.5">3. Quem Leva o Monte?</strong>
             O <strong>último</strong> a bater (ou quem queimar a largada) leva o monte inteiro. Ganha quem zerar as cartas primeiro!
           </div>
+          <div class="bg-surface p-2.5 rounded-2xl border border-slate-800">
+            <strong class="text-cyan block mb-0.5">4. Gestos e Teclado</strong>
+            🦍 toque 2x · 🦄 deslize ↑ · 🦫 sacuda o celular. No PC: <strong>↑</strong> joga carta / chifre, <strong>Espaço</strong> bate, <strong>S</strong> sacode.
+          </div>
         </div>
       </div>
       <button onclick="closeRulesModal()" class="w-full py-3 rounded-2xl bg-coral text-white font-display font-bold text-sm neo-shadow-sm">
@@ -732,6 +745,22 @@
       tabSessionId = 'tab_' + Date.now();
     }
 
+    // "Duplicar aba" copia o sessionStorage: a aba nova anuncia seu id e,
+    // se outra aba já o usa, gera um novo (senão as duas disputariam o mesmo slot).
+    try {
+      const tabChannel = new BroadcastChannel('taco_chaos_tabs');
+      tabChannel.onmessage = (e) => {
+        const msg = e.data || {};
+        if (msg.type === 'hello' && msg.id === tabSessionId) {
+          tabChannel.postMessage({ type: 'duplicate', id: tabSessionId });
+        } else if (msg.type === 'duplicate' && msg.id === tabSessionId) {
+          tabSessionId = 'tab_' + Math.random().toString(36).substr(2, 9);
+          try { sessionStorage.setItem('taco_tab_session_id', tabSessionId); } catch (err) {}
+        }
+      };
+      tabChannel.postMessage({ type: 'hello', id: tabSessionId });
+    } catch (e) {}
+
     let localUser = {
       userId: '',
       name: 'Jogador',
@@ -742,8 +771,16 @@
     function initUserAccount() {
       try {
         const saved = localStorage.getItem('taco_chaos_user');
-        if (saved) {
-          localUser = JSON.parse(saved);
+        const parsed = saved ? JSON.parse(saved) : null;
+        if (parsed && parsed.userId) {
+          // Normaliza perfis antigos/incompletos
+          localUser = {
+            ...localUser,
+            ...parsed,
+            name: String(parsed.name || 'Jogador').slice(0, 14),
+            avatar: AVATAR_OPTIONS.includes(parsed.avatar) ? parsed.avatar : '😎',
+            stats: { matches: 0, wins: 0, slaps: 0, ...(parsed.stats || {}) }
+          };
         } else {
           // Generate new account
           localUser.userId = 'usr_' + Math.random().toString(36).substr(2, 9);
@@ -770,39 +807,68 @@
       document.getElementById('player-name-hud').textContent = localUser.name;
     }
 
+    // Avatar escolhido no modal, só aplicado ao salvar
+    let pendingAvatar = null;
+
     function openProfileModal() {
+      pendingAvatar = localUser.avatar;
       document.getElementById('profile-name-input').value = localUser.name;
       document.getElementById('stat-matches').textContent = localUser.stats.matches || 0;
       document.getElementById('stat-wins').textContent = localUser.stats.wins || 0;
       document.getElementById('stat-slaps').textContent = localUser.stats.slaps || 0;
+      renderAvatarGrid();
+      document.getElementById('profile-modal').classList.remove('hidden');
+    }
 
+    // Redesenha só a grade (não apaga o nome que está sendo digitado)
+    function renderAvatarGrid() {
       const grid = document.getElementById('avatar-grid');
       grid.innerHTML = '';
       AVATAR_OPTIONS.forEach(emoji => {
         const btn = document.createElement('button');
         btn.textContent = emoji;
-        btn.className = `p-2 rounded-xl transition ${localUser.avatar === emoji ? 'bg-mint/30 border-2 border-mint' : 'hover:bg-cardbg'}`;
+        btn.className = `p-2 rounded-xl transition ${pendingAvatar === emoji ? 'bg-mint/30 border-2 border-mint' : 'hover:bg-cardbg'}`;
         btn.onclick = () => {
-          localUser.avatar = emoji;
-          openProfileModal(); // Refresh active indicator
+          pendingAvatar = emoji;
+          renderAvatarGrid();
         };
         grid.appendChild(btn);
       });
-
-      document.getElementById('profile-modal').classList.remove('hidden');
     }
 
     function closeProfileModal() {
+      pendingAvatar = null; // Fechar no ✕ descarta a escolha
       document.getElementById('profile-modal').classList.add('hidden');
     }
 
     function saveUserProfile() {
       const nameInput = document.getElementById('profile-name-input').value.trim();
-      if (nameInput) localUser.name = nameInput;
+      if (nameInput) localUser.name = nameInput.slice(0, 14);
+      if (pendingAvatar) localUser.avatar = pendingAvatar;
       saveUserToStorage();
       updateHeaderUserUI();
       closeProfileModal();
+      syncProfileToRoom();
       showToast('Perfil atualizado!', 'border-mint');
+    }
+
+    // No lobby (antes da partida), propaga nome/avatar novos para a sala
+    function syncProfileToRoom() {
+      if (!gameState.isMultiplayer || gameState.running) return;
+      if (gameState.isHost && gameState.slots[0]) {
+        gameState.slots[0].name = localUser.name;
+        gameState.slots[0].avatar = localUser.avatar;
+        broadcastRoomUpdate();
+        renderLobbySlots();
+      } else if (clientConnection && clientConnection.open) {
+        clientConnection.send({
+          type: 'JOIN_OR_RECONNECT',
+          userId: localUser.userId,
+          tabSessionId: tabSessionId,
+          name: localUser.name,
+          avatar: localUser.avatar
+        });
+      }
     }
 
     // =========================================================================
@@ -1019,6 +1085,22 @@
       { emoji: '🎒', title: 'MOCHILA CHEIA!', sub: 'Ganhou um monte de recordação!' },
       { emoji: '💥', title: 'QUEIMOU A LARGADA!', sub: 'Mãozinha apressada paga caro!' }
     ];
+    const FALSE_START_MEME_INDEX = 5;
+
+    // Stickers permitidos (o host só repassa os que estão nesta lista)
+    const STICKERS = {
+      '🌮': 'Taco!', '🐱': 'Miau!', '🐐': 'Béé!', '🧀': 'Queijo!', '🍕': 'Pizza!', '🦍': 'Uhh Uhh!',
+      '🦄': 'Chifre!', '🦫': 'Sacode!', '🔥': 'Fogo!', '💀': 'RIP!', '🤡': 'Palhaço!', '⚡': 'Rápido!'
+    };
+    const STICKER_COOLDOWN_MS = 1500;
+
+    function getCardById(id) {
+      return (id && CARDS_DATA[id]) ? CARDS_DATA[id] : null;
+    }
+
+    function getModifierById(id) {
+      return CHAOS_MODIFIERS.find(m => m.id === id) || CHAOS_MODIFIERS[0];
+    }
 
     // =========================================================================
     // 4. GAME STATE (UP TO 6 PARTICIPANTS - CLIENT-SIDE ENGINE)
@@ -1038,10 +1120,41 @@
       gestureTaps: 0,
       slapOrder: [],
       roundLocked: false,
+      mySlappedThisRound: false,
+      currentModifierId: 'NONE',
+      winnerSlot: null,
+      gameId: 0,          // Incrementa a cada partida: timers de partidas antigas viram no-op
       botTurnTimer: null,
-      botSlapTimers: [],
-      resolveTimer: null
+      pendingTimers: []   // Todos os timeouts da partida (bots, resolução, desbloqueio)
     };
+
+    // setTimeout amarrado à partida atual: é cancelado por clearAllTimers()
+    // e ignorado se uma nova partida começou nesse meio tempo.
+    function gameTimeout(fn, ms) {
+      const gid = gameState.gameId;
+      const t = setTimeout(() => {
+        gameState.pendingTimers = gameState.pendingTimers.filter(x => x !== t);
+        if (gid !== gameState.gameId) return;
+        fn();
+      }, ms);
+      gameState.pendingTimers.push(t);
+      return t;
+    }
+
+    // Escapa texto vindo da rede/usuário antes de ir para innerHTML
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    const SLAP_COLORS = ['#06D6A0', '#3A86FF', '#8338EC', '#FFD60A', '#FF4D6D', '#F97316'];
+    const RESOLVE_TIMEOUT_MS = 2800;
+    const ROUND_UNLOCK_MS = 1600;
+    const RESOLVE_DELAY_MS = 850;
 
     // Default Bots Palette & Names
     const BOT_PRESETS = [
@@ -1057,8 +1170,30 @@
     // =========================================================================
     let peer = null;
     let currentRoomCode = null;
-    let hostConnections = []; // If I am host: array of PeerConnections
-    let clientConnection = null; // If I am client: connection to host
+    let clientConnection = null;   // Se sou cliente: conexão com o host
+    let heartbeatInterval = null;
+    let lastHostSeen = 0;
+    let reconnectAttempts = 0;
+    let reconnectTimer = null;
+    let pendingJoinPeer = null;    // Peer aguardando JOIN_ACCEPTED/RECONNECT_SUCCESS
+    let lastStickerAt = 0;
+    let tableNotice = null;        // Aviso exibido na mesa (ex: "O host saiu")
+
+    const PEER_CONFIG = {
+      debug: 1,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:global.stun.twilio.com:3478' }
+        ]
+      }
+    };
+    const HEARTBEAT_MS = 2000;
+    const HEARTBEAT_TIMEOUT_MS = 7000;
+    const JOIN_TIMEOUT_MS = 10000;
+    const MAX_RECONNECT_ATTEMPTS = 5;
+    const LAST_ROOM_KEY = 'taco_chaos_last_room';
+    const LAST_ROOM_MAX_AGE_MS = 15 * 60 * 1000;
 
     function generateRoomCode() {
       const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -1069,21 +1204,141 @@
       return code;
     }
 
+    function sanitizeRoomCode(raw) {
+      return String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    }
+
+    function sanitizeName(raw) {
+      const name = String(raw || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 14);
+      return name || 'Jogador';
+    }
+
+    function sanitizeAvatar(raw) {
+      return AVATAR_OPTIONS.includes(raw) ? raw : '😎';
+    }
+
+    function setP2PStatus(colorClass, text, pulse = false) {
+      document.getElementById('p2p-status-dot').innerHTML =
+        `<span class="w-2 h-2 rounded-full ${colorClass} inline-block ${pulse ? 'animate-pulse' : ''}"></span> ${escapeHtml(text)}`;
+    }
+
+    function updateRoomHash(code) {
+      try {
+        const base = window.location.pathname + window.location.search;
+        history.replaceState(null, '', code ? `${base}#sala=${code}` : base);
+      } catch (e) {}
+    }
+
+    function saveLastRoom(code) {
+      try { localStorage.setItem(LAST_ROOM_KEY, JSON.stringify({ code, ts: Date.now() })); } catch (e) {}
+    }
+
+    function clearLastRoom() {
+      try { localStorage.removeItem(LAST_ROOM_KEY); } catch (e) {}
+    }
+
+    function readLastRoom() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(LAST_ROOM_KEY));
+        if (raw && raw.code && Date.now() - raw.ts < LAST_ROOM_MAX_AGE_MS) return sanitizeRoomCode(raw.code);
+      } catch (e) {}
+      return null;
+    }
+
+    function showRoomUI() {
+      document.getElementById('active-room-code').textContent = currentRoomCode;
+      document.getElementById('lobby-join-controls').classList.add('hidden');
+      document.getElementById('lobby-room-details').classList.remove('hidden');
+      document.getElementById('room-status-badge').textContent = `SALA: ${currentRoomCode}${gameState.isHost ? ' (HOST)' : ''}`;
+      setP2PStatus('bg-mint', gameState.isHost ? 'Sala Criada' : 'Conectado!');
+    }
+
+    function resetLobbyUI() {
+      document.getElementById('lobby-join-controls').classList.remove('hidden');
+      document.getElementById('lobby-room-details').classList.add('hidden');
+      document.getElementById('btn-start-p2p-game').classList.remove('hidden');
+      document.getElementById('host-hint-text').textContent = 'Toque em slot vazio p/ adicionar bot';
+      document.getElementById('room-status-badge').textContent = 'P2P PARTY GAME';
+      setP2PStatus('bg-yellow-400', 'Pronto');
+      renderRejoinOption();
+    }
+
+    function renderRejoinOption() {
+      const box = document.getElementById('lobby-rejoin');
+      if (!box) return;
+      const code = readLastRoom();
+      if (code && !currentRoomCode) {
+        document.getElementById('lobby-rejoin-code').textContent = code;
+        box.classList.remove('hidden');
+      } else {
+        box.classList.add('hidden');
+      }
+    }
+
+    function rejoinLastRoom() {
+      const code = readLastRoom();
+      if (code) joinP2PRoom(code);
+    }
+
+    // Encerra QUALQUER sessão anterior (solo, host ou cliente): timers, peer, estado e UI.
+    function teardownSession() {
+      clearAllTimers();
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      reconnectAttempts = 0;
+      pendingJoinPeer = null;
+
+      const oldPeer = peer;
+      peer = null;               // Handlers do peer antigo passam a ser ignorados
+      clientConnection = null;
+      if (oldPeer) {
+        // Pequeno atraso para mensagens finais (ex: ROOM_CLOSED) saírem antes de fechar
+        setTimeout(() => { try { oldPeer.destroy(); } catch (e) {} }, 250);
+      }
+
+      gameState.gameId++;
+      gameState.isMultiplayer = false;
+      gameState.isHost = false;
+      gameState.running = false;
+      gameState.mySlotIndex = 0;
+      gameState.slots = [];
+      gameState.winnerSlot = null;
+      currentRoomCode = null;
+      tableNotice = null;
+
+      resetRoundState();
+      resetLobbyUI();
+      updateRoomHash(null);
+      updateOpponentsUI();
+      updateHUD();
+      setTurnUI();
+    }
+
     function renderTableOverlay() {
       const slot = document.getElementById('active-card-slot');
       if (!slot) return;
 
-      // If game is actively running, never show the lobby/start card
+      // Partida rodando: nunca mostra o card de lobby
       if (gameState.running) {
         if (gameState.currentCard) {
-          renderCardInCenter(gameState.currentCard, { id: 'NONE', label: 'NORMAL', class: '' });
+          renderCardInCenter(gameState.currentCard, getModifierById(gameState.currentModifierId));
         } else {
           slot.innerHTML = '';
         }
         return;
       }
 
-      // If inside a Multiplayer Room (before match start)
+      // Partida terminou: mantém a tela de vitória
+      if (gameState.winnerSlot !== null && gameState.slots[gameState.winnerSlot]) {
+        renderGameOver();
+        return;
+      }
+
+      const roomCode = escapeHtml(currentRoomCode || '');
+
+      // Dentro de uma sala multiplayer (antes da partida)
       if (gameState.isMultiplayer && currentRoomCode) {
         const playerCount = gameState.slots ? gameState.slots.length : 1;
         if (gameState.isHost) {
@@ -1091,7 +1346,7 @@
             <div id="start-overlay" class="w-full h-full rounded-[26px] bg-gradient-to-br from-surface to-cardbg border-2 border-electric neo-shadow flex flex-col items-center justify-center p-3 text-center z-20">
               <div class="text-3xl mb-1">👑⚡</div>
               <span class="text-[9px] font-extrabold uppercase tracking-widest text-electric mb-0.5">SALA MULTIPLAYER</span>
-              <h2 class="font-display font-bold text-xl text-white tracking-widest leading-tight mb-1">${currentRoomCode}</h2>
+              <h2 class="font-display font-bold text-xl text-white tracking-widest leading-tight mb-1">${roomCode}</h2>
               <p class="text-[10px] text-slate-300 mb-3">
                 ${playerCount} participante${playerCount > 1 ? 's' : ''} na sala.
               </p>
@@ -1110,7 +1365,7 @@
             <div id="start-overlay" class="w-full h-full rounded-[26px] bg-gradient-to-br from-surface to-cardbg border-2 border-cyan neo-shadow flex flex-col items-center justify-center p-3 text-center z-20">
               <div class="text-3xl mb-1">🎮⚡</div>
               <span class="text-[9px] font-extrabold uppercase tracking-widest text-cyan mb-0.5">SALA MULTIPLAYER</span>
-              <h2 class="font-display font-bold text-xl text-white tracking-widest leading-tight mb-1">${currentRoomCode}</h2>
+              <h2 class="font-display font-bold text-xl text-white tracking-widest leading-tight mb-1">${roomCode}</h2>
               <p class="text-[10px] text-slate-300 mb-3">
                 Aguardando o Host iniciar a partida...
               </p>
@@ -1123,14 +1378,15 @@
         return;
       }
 
-      // Default welcome overlay when NOT in any room
+      // Tela inicial (fora de qualquer sala)
       slot.innerHTML = `
         <div id="start-overlay" class="w-full h-full rounded-[26px] bg-gradient-to-br from-surface to-cardbg border-2 border-slate-700 neo-shadow flex flex-col items-center justify-center p-3 text-center z-20">
           <div class="text-3xl mb-1">🃏⚡</div>
           <h2 class="font-display font-bold text-base text-white leading-tight mb-1">Taco Gato Chaos</h2>
+          ${tableNotice ? `<p class="text-[10px] text-coral font-bold mb-2 leading-snug">${escapeHtml(tableNotice)}</p>` : `
           <p class="text-[10px] text-slate-400 mb-3 leading-relaxed">
             Jogue em modo Solo ou crie uma Sala P2P para até 6 amigos no celular!
-          </p>
+          </p>`}
           <div class="flex flex-col gap-1.5 w-full">
             <button onclick="startSoloGame()" class="w-full py-2.5 rounded-xl bg-mint text-void font-display font-bold text-xs neo-shadow-sm neo-active hover:brightness-110 transition">
               🎮 JOGAR SOLO (VS BOTS)
@@ -1143,201 +1399,252 @@
       `;
     }
 
-    function createP2PRoom() {
+    function createP2PRoom(attempt = 0) {
       initAudio();
-      currentRoomCode = generateRoomCode();
-      const peerId = 'taco-p2p-' + currentRoomCode.toLowerCase();
+      enableMotionSensors();
+      teardownSession();
 
-      document.getElementById('p2p-status-dot').innerHTML = '<span class="w-2 h-2 rounded-full bg-yellow-400 inline-block animate-pulse"></span> Criando...';
+      const code = generateRoomCode();
+      currentRoomCode = code;
+      setP2PStatus('bg-yellow-400', 'Criando...', true);
 
-      if (peer) peer.destroy();
+      const myPeer = new Peer('taco-p2p-' + code.toLowerCase(), PEER_CONFIG);
+      peer = myPeer;
 
-      peer = new Peer(peerId, {
-        debug: 1,
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' }
-          ]
-        }
-      });
-
-      peer.on('open', (id) => {
+      myPeer.on('open', () => {
+        if (peer !== myPeer) return;
         gameState.isMultiplayer = true;
         gameState.isHost = true;
         gameState.mySlotIndex = 0;
-        hostConnections = [];
 
-        // In multiplayer, initialize with ONLY the Host! Slots 1-5 will be filled by other players or bots
+        // Sala começa só com o host; vagas 1-5 são de jogadores ou bots
         gameState.slots = [
           { id: 'host', userId: localUser.userId, tabSessionId: tabSessionId, name: localUser.name, avatar: localUser.avatar, isBot: false, isHost: true, cardsCount: 10, conn: null }
         ];
 
-        document.getElementById('active-room-code').textContent = currentRoomCode;
-        document.getElementById('lobby-join-controls').classList.add('hidden');
-        document.getElementById('lobby-room-details').classList.remove('hidden');
-        document.getElementById('p2p-status-dot').innerHTML = '<span class="w-2 h-2 rounded-full bg-mint inline-block"></span> Sala Criada';
-        document.getElementById('room-status-badge').textContent = `SALA: ${currentRoomCode} (HOST)`;
-
+        showRoomUI();
+        startHostHeartbeat();
         renderLobbySlots();
         renderTableOverlay();
-        showToast(`Sala ${currentRoomCode} criada! Compartilhe o código!`, 'border-mint');
+        updateOpponentsUI();
+        showToast(`Sala ${code} criada! Compartilhe o código!`, 'border-mint');
       });
 
-      peer.on('connection', (conn) => {
-        // Host accepts incoming client connection
+      myPeer.on('connection', (conn) => {
+        if (peer !== myPeer) { try { conn.close(); } catch (e) {} return; }
         handleHostIncomingConnection(conn);
       });
 
-      peer.on('error', (err) => {
-        console.error('Peer error:', err);
-        document.getElementById('p2p-status-dot').innerHTML = '<span class="w-2 h-2 rounded-full bg-coral inline-block"></span> Erro de Conexão';
-        showToast('Erro ao criar sala. Tente outro código.', 'border-coral');
+      // Perdeu só o servidor de sinalização: conexões ativas seguem, mas reabre para novos jogadores
+      myPeer.on('disconnected', () => {
+        if (peer !== myPeer) return;
+        try { myPeer.reconnect(); } catch (e) {}
       });
-    }
 
-    function addHostConnection(conn) {
-      if (!conn) return;
-      if (!hostConnections.includes(conn)) {
-        hostConnections.push(conn);
-      }
+      myPeer.on('error', (err) => {
+        if (peer !== myPeer) return;
+        console.error('Peer error:', err);
+        if (err && err.type === 'unavailable-id' && attempt < 3) {
+          createP2PRoom(attempt + 1); // Código já em uso: tenta outro
+          return;
+        }
+        if (!gameState.isMultiplayer) {
+          teardownSession();
+          setP2PStatus('bg-coral', 'Erro de Conexão');
+          showToast('Erro ao criar sala. Verifique a internet e tente de novo.', 'border-coral');
+        } else {
+          showToast('Instabilidade na rede da sala.', 'border-coral');
+        }
+      });
     }
 
     function handleHostIncomingConnection(conn) {
-      addHostConnection(conn);
-      if (conn.open) {
-        addHostConnection(conn);
-      } else {
-        conn.on('open', () => addHostConnection(conn));
-      }
+      conn.on('data', (data) => handleHostReceivedMessage(conn, data));
+      conn.on('close', () => handleClientDisconnection(conn));
+      conn.on('error', () => handleClientDisconnection(conn));
+    }
 
-      conn.on('data', (data) => {
-        addHostConnection(conn);
-        handleHostReceivedMessage(conn, data);
-      });
-
-      // BOT FAILOVER ON DISCONNECT!
-      conn.on('close', () => {
-        const idx = hostConnections.indexOf(conn);
-        if (idx !== -1) hostConnections.splice(idx, 1);
-        handleClientDisconnection(conn);
-      });
+    function startHostHeartbeat() {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = setInterval(() => {
+        if (!gameState.isHost || !gameState.isMultiplayer) return;
+        const now = Date.now();
+        // Quedas "sujas" (celular sem sinal, aba morta) não disparam 'close': detecta por silêncio
+        gameState.slots
+          .filter(s => s.conn && now - (s.lastSeen || now) > HEARTBEAT_TIMEOUT_MS)
+          .forEach(s => handleClientDisconnection(s.conn));
+        broadcastToClients({ type: 'PING' });
+      }, HEARTBEAT_MS);
     }
 
     function handleClientDisconnection(conn) {
-      const slot = gameState.slots.find(s => s.conn === conn);
-      if (slot && !slot.isBot) {
+      if (!gameState.isHost) return;
+      const idx = gameState.slots.findIndex(s => s.conn === conn);
+      if (idx === -1) return; // Já tratado (ou conexão substituída por reconexão)
+      const slot = gameState.slots[idx];
+      slot.conn = null;
+
+      if (!gameState.running) {
+        // No lobby a vaga é liberada em vez de virar robô
+        gameState.slots.splice(idx, 1);
+        broadcastRoomUpdate();
+        showToast(`${slot.name} saiu da sala.`, 'border-coral');
+        renderLobbySlots();
+        renderTableOverlay();
+        updateOpponentsUI();
+      } else {
         slot.isBot = true;
-        slot.conn = null;
         broadcastToClients({
           type: 'PLAYER_DISCONNECTED',
-          slotIndex: gameState.slots.indexOf(slot),
-          name: slot.name
+          slotIndex: idx,
+          name: slot.name,
+          slots: getSanitizedSlots()
         });
         showToast(`${slot.name} desconectou. O robô assumiu!`, 'border-coral');
         updateOpponentsUI();
         renderLobbySlots();
 
-        // If it's currently this bot's turn, make it play!
-        if (gameState.running && gameState.turnSlot === gameState.slots.indexOf(slot) && !gameState.isTriggerActive) {
+        // O robô assume a ação pendente desse jogador
+        if (gameState.isTriggerActive && !gameState.roundLocked && !hasSlapped(idx)) {
+          scheduleBotSlap(idx);
+        } else if (gameState.turnSlot === idx && !gameState.isTriggerActive && !gameState.roundLocked) {
           scheduleBotTurn();
         }
       }
+
+      try { conn.close(); } catch (e) {}
     }
 
-    function joinP2PRoom(codeToJoin) {
+    function joinP2PRoom(codeToJoin, opts = {}) {
       initAudio();
-      const code = (codeToJoin || document.getElementById('input-room-code').value).trim().toUpperCase();
+      enableMotionSensors();
+      const code = sanitizeRoomCode(codeToJoin || document.getElementById('input-room-code').value);
       if (!code) {
         showToast('Digite o código da sala!', 'border-coral');
         return;
       }
 
+      if (opts.isRetry) {
+        // Reconexão: mantém o estado do jogo na tela, só troca o peer
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+        const oldPeer = peer;
+        peer = null;
+        clientConnection = null;
+        if (oldPeer) { try { oldPeer.destroy(); } catch (e) {} }
+        setP2PStatus('bg-yellow-400', `Reconectando (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, true);
+      } else {
+        teardownSession();
+        setP2PStatus('bg-yellow-400', 'Conectando...', true);
+      }
+
       currentRoomCode = code;
       const targetPeerId = 'taco-p2p-' + code.toLowerCase();
+      const myPeer = new Peer(PEER_CONFIG);
+      peer = myPeer;
+      pendingJoinPeer = myPeer;
 
-      document.getElementById('p2p-status-dot').innerHTML = '<span class="w-2 h-2 rounded-full bg-yellow-400 inline-block animate-pulse"></span> Conectando...';
+      // Sem resposta do host em 10s: falha (ou nova tentativa, se já estávamos na sala)
+      setTimeout(() => {
+        if (peer === myPeer && pendingJoinPeer === myPeer) handleHostConnectionLost();
+      }, JOIN_TIMEOUT_MS);
 
-      if (peer) peer.destroy();
+      myPeer.on('open', () => {
+        if (peer !== myPeer) return;
+        const conn = myPeer.connect(targetPeerId, { reliable: true });
+        clientConnection = conn;
 
-      peer = new Peer({
-        debug: 1,
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' }
-          ]
-        }
-      });
-
-      peer.on('open', (id) => {
-        clientConnection = peer.connect(targetPeerId, { reliable: true });
-
-        const sendJoinMessage = () => {
-          gameState.isMultiplayer = true;
-          gameState.isHost = false;
-
-          document.getElementById('active-room-code').textContent = currentRoomCode;
-          document.getElementById('lobby-join-controls').classList.add('hidden');
-          document.getElementById('lobby-room-details').classList.remove('hidden');
-          document.getElementById('btn-start-p2p-game').classList.add('hidden'); // Only host starts
-          document.getElementById('host-hint-text').textContent = 'Aguardando o Host iniciar a partida...';
-          document.getElementById('p2p-status-dot').innerHTML = '<span class="w-2 h-2 rounded-full bg-mint inline-block"></span> Conectado!';
-          document.getElementById('room-status-badge').textContent = `SALA: ${currentRoomCode}`;
-
-          // Send JOIN or RECONNECT message including tabSessionId for local testing
-          clientConnection.send({
+        conn.on('open', () => {
+          if (peer !== myPeer) return;
+          lastHostSeen = Date.now();
+          conn.send({
             type: 'JOIN_OR_RECONNECT',
             userId: localUser.userId,
             tabSessionId: tabSessionId,
             name: localUser.name,
             avatar: localUser.avatar
           });
+          startClientHeartbeat();
+        });
 
-          renderTableOverlay();
-
-          // Remember last joined room for transparent reconnection
-          try { localStorage.setItem('taco_chaos_last_room', currentRoomCode); } catch (e) {}
-        };
-
-        if (clientConnection.open) {
-          sendJoinMessage();
-        } else {
-          clientConnection.on('open', sendJoinMessage);
-        }
-
-        clientConnection.on('data', (data) => {
+        conn.on('data', (data) => {
+          if (peer !== myPeer) return;
+          lastHostSeen = Date.now();
           handleClientReceivedMessage(data);
         });
 
-        clientConnection.on('close', () => {
-          showToast('Desconectado da sala.', 'border-coral');
-          document.getElementById('p2p-status-dot').innerHTML = '<span class="w-2 h-2 rounded-full bg-coral inline-block"></span> Desconectado';
+        conn.on('close', () => {
+          if (peer !== myPeer) return;
+          handleHostConnectionLost();
+        });
+
+        conn.on('error', () => {
+          if (peer !== myPeer) return;
+          handleHostConnectionLost();
         });
       });
 
-      peer.on('error', (err) => {
+      myPeer.on('error', (err) => {
+        if (peer !== myPeer) return;
         console.error('Peer join error:', err);
-        showToast('Não foi possível conectar à sala. Verifique o código!', 'border-coral');
-        document.getElementById('p2p-status-dot').innerHTML = '<span class="w-2 h-2 rounded-full bg-coral inline-block"></span> Erro';
+        handleHostConnectionLost();
       });
     }
 
+    function startClientHeartbeat() {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = setInterval(() => {
+        if (gameState.isHost || !clientConnection) return;
+        if (Date.now() - lastHostSeen > HEARTBEAT_TIMEOUT_MS) {
+          handleHostConnectionLost();
+        }
+      }, HEARTBEAT_MS);
+    }
+
+    // Cliente perdeu o host: tenta reconectar com espera crescente; esgotou → encerra a sala
+    function handleHostConnectionLost() {
+      if (gameState.isHost || !currentRoomCode) return;
+      if (reconnectTimer) return; // Já há uma tentativa agendada
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+
+      if (!gameState.isMultiplayer) {
+        // Nunca chegou a entrar na sala
+        endRoomForClient('Não foi possível conectar à sala. Verifique o código!');
+        return;
+      }
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        endRoomForClient('O host saiu ou a conexão caiu. A sala foi encerrada.');
+        return;
+      }
+
+      reconnectAttempts++;
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 8000);
+      setP2PStatus('bg-yellow-400', `Reconectando (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, true);
+      showToast('Conexão perdida. Tentando reconectar...', 'border-coral');
+      const code = currentRoomCode;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        joinP2PRoom(code, { isRetry: true });
+      }, delay);
+    }
+
+    function endRoomForClient(message) {
+      clearLastRoom();
+      teardownSession();
+      tableNotice = message;
+      setP2PStatus('bg-coral', 'Desconectado');
+      switchTab('play');
+      renderTableOverlay();
+      showToast(message, 'border-coral');
+    }
+
     function leaveP2PRoom() {
-      if (peer) peer.destroy();
-      peer = null;
-      clientConnection = null;
-      hostConnections = [];
-      gameState.isMultiplayer = false;
-      gameState.isHost = false;
-      currentRoomCode = null;
-
-      document.getElementById('lobby-join-controls').classList.remove('hidden');
-      document.getElementById('lobby-room-details').classList.add('hidden');
-      document.getElementById('btn-start-p2p-game').classList.remove('hidden');
-      document.getElementById('p2p-status-dot').innerHTML = '<span class="w-2 h-2 rounded-full bg-yellow-400 inline-block"></span> Pronto';
-      document.getElementById('room-status-badge').textContent = 'P2P PARTY GAME';
-
+      if (gameState.isHost && gameState.isMultiplayer) {
+        broadcastToClients({ type: 'ROOM_CLOSED' });
+      }
+      clearLastRoom();
+      teardownSession();
       renderTableOverlay();
       showToast('Você saiu da sala.', 'border-coral');
     }
@@ -1345,7 +1652,9 @@
     function copyRoomLink() {
       const url = `${window.location.origin}${window.location.pathname}#sala=${currentRoomCode}`;
       if (navigator.clipboard) {
-        navigator.clipboard.writeText(url).then(() => showToast('Link copiado! Envie aos amigos.', 'border-mint'));
+        navigator.clipboard.writeText(url)
+          .then(() => showToast('Link copiado! Envie aos amigos.', 'border-mint'))
+          .catch(() => showToast(`Código: ${currentRoomCode}`, 'border-electric'));
       } else {
         showToast(`Código: ${currentRoomCode}`, 'border-electric');
       }
@@ -1354,18 +1663,14 @@
     // =========================================================================
     // 6. MULTIPLAYER PROTOCOL MESSAGES (HOST & CLIENT)
     // =========================================================================
+    // Todo pacote do host leva o yourSlotIndex do destinatário: se os slots
+    // mudarem de posição (alguém saiu do lobby), cada cliente se re-localiza.
     function broadcastToClients(msg) {
       if (!gameState.isHost) return;
-      const targetConns = new Set();
-      hostConnections.forEach(c => targetConns.add(c));
-      gameState.slots.forEach(s => {
-        if (s.conn) targetConns.add(s.conn);
-      });
-
-      targetConns.forEach(conn => {
-        if (conn && conn.open) {
+      gameState.slots.forEach((s, idx) => {
+        if (s.conn && s.conn.open) {
           try {
-            conn.send(msg);
+            s.conn.send({ ...msg, yourSlotIndex: idx });
           } catch (e) {
             console.warn('Error broadcasting message to client:', e);
           }
@@ -1373,193 +1678,277 @@
       });
     }
 
+    function broadcastRoomUpdate() {
+      broadcastToClients({ type: 'ROOM_UPDATE', slots: getSanitizedSlots() });
+    }
+
+    function safeSend(conn, msg) {
+      try { if (conn && conn.open) conn.send(msg); } catch (e) {}
+    }
+
     function handleHostReceivedMessage(conn, data) {
-      if (!data || !data.type) return;
+      if (!gameState.isHost || !data || typeof data.type !== 'string') return;
+
+      // O slot é SEMPRE derivado da conexão, nunca do que o cliente diz
+      const slotIndex = gameState.slots.findIndex(s => s.conn === conn);
+      if (slotIndex !== -1) gameState.slots[slotIndex].lastSeen = Date.now();
 
       if (data.type === 'JOIN_OR_RECONNECT') {
-        addHostConnection(conn);
-
-        // If coming from another tab on the same browser (same userId as Host, but different tabSessionId):
-        // Automatically differentiate player so two tabs on same machine can play seamlessly!
-        const isSameMachineTab = (data.userId === gameState.slots[0].userId && data.tabSessionId !== tabSessionId);
-        let effectiveUserId = data.userId;
-        let effectiveName = data.name;
-
-        if (isSameMachineTab) {
-          effectiveUserId = 'local_' + data.tabSessionId;
-          effectiveName = data.name + ' (Aba 2)';
-        }
-
-        // Check if player is RECONNECTING to a disconnected slot
-        const existingSlotIdx = gameState.slots.findIndex(s => s.userId === effectiveUserId);
-
-        if (existingSlotIdx !== -1 && (gameState.slots[existingSlotIdx].isBot || !gameState.slots[existingSlotIdx].conn)) {
-          // Reconnect to existing slot!
-          const slot = gameState.slots[existingSlotIdx];
-          slot.conn = conn;
-          slot.isBot = false;
-          slot.name = effectiveName;
-          slot.avatar = data.avatar;
-
-          conn.send({
-            type: 'RECONNECT_SUCCESS',
-            yourSlotIndex: existingSlotIdx,
-            fullState: getPublicGameState()
-          });
-
-          broadcastToClients({
-            type: 'PLAYER_RECONNECTED',
-            slotIndex: existingSlotIdx,
-            name: slot.name,
-            slots: getSanitizedSlots()
-          });
-
-          showToast(`${slot.name} reconectou e reassumiu sua vaga!`, 'border-mint');
-          updateOpponentsUI();
-          renderLobbySlots();
-          return;
-        }
-
-        // New player joining
-        if (gameState.slots.length < 6) {
-          const newSlotIdx = gameState.slots.length;
-          gameState.slots.push({
-            id: 'client_' + newSlotIdx,
-            userId: effectiveUserId,
-            name: effectiveName,
-            avatar: data.avatar,
-            isBot: false,
-            isHost: false,
-            cardsCount: 10,
-            conn: conn
-          });
-
-          conn.send({
-            type: 'JOIN_ACCEPTED',
-            yourSlotIndex: newSlotIdx,
-            fullState: getPublicGameState()
-          });
-
-          broadcastToClients({
-            type: 'ROOM_UPDATE',
-            slots: getSanitizedSlots()
-          });
-
-          renderLobbySlots();
-          renderTableOverlay();
-          updateOpponentsUI();
-          showToast(`${effectiveName} entrou na sala!`, 'border-cyan');
+        if (slotIndex !== -1) {
+          // Conexão já tem vaga: só atualiza o perfil (nunca cria/troca de slot)
+          handleProfileUpdate(slotIndex, data);
         } else {
-          conn.send({ type: 'ROOM_FULL' });
+          handleJoinRequest(conn, data);
         }
+        return;
+      }
+      if (slotIndex === -1) return; // Conexão sem slot: ignora
+
+      if (data.type === 'PLAYER_PLAY_CARD') {
+        if (gameState.running && gameState.turnSlot === slotIndex && !gameState.roundLocked && !gameState.isTriggerActive) {
+          executePlayCard(slotIndex);
+        }
+      } else if (data.type === 'PLAYER_SLAP') {
+        processSlap(slotIndex);
+      } else if (data.type === 'SEND_STICKER') {
+        relaySticker(slotIndex, data.emoji);
+      }
+      // 'PONG' só atualiza lastSeen (feito acima)
+    }
+
+    function handleProfileUpdate(slotIndex, data) {
+      if (gameState.running) return;
+      const slot = gameState.slots[slotIndex];
+      const name = sanitizeName(data.name);
+      slot.name = String(slot.userId).startsWith('local_') ? `${name} (Aba)` : name;
+      slot.avatar = sanitizeAvatar(data.avatar);
+      broadcastRoomUpdate();
+      renderLobbySlots();
+      updateOpponentsUI();
+    }
+
+    function handleJoinRequest(conn, data) {
+      const name = sanitizeName(data.name);
+      const avatar = sanitizeAvatar(data.avatar);
+      const tab = String(data.tabSessionId || '').slice(0, 40);
+      const hostSlot = gameState.slots[0];
+
+      let effectiveUserId = String(data.userId || '').slice(0, 60) || ('anon_' + tab);
+      let effectiveName = name;
+
+      // Outra aba do mesmo navegador do host (mesmo userId): vira um jogador distinto
+      if (effectiveUserId === hostSlot.userId) {
+        effectiveUserId = 'local_' + tab;
+        effectiveName = `${name} (Aba)`;
       }
 
-      else if (data.type === 'PLAYER_PLAY_CARD') {
-        if (gameState.running && gameState.turnSlot === data.slotIndex && !gameState.roundLocked && !gameState.isTriggerActive) {
-          executePlayCard(data.slotIndex);
-        }
-      }
+      // Reconexão: mesmo userId de um slot existente (nunca o do host).
+      // Se a conexão antiga ainda parecer aberta (queda "suja"), ela é substituída.
+      const existingSlotIdx = gameState.slots.findIndex((s, i) => i > 0 && s.userId === effectiveUserId);
+      if (existingSlotIdx !== -1) {
+        const slot = gameState.slots[existingSlotIdx];
+        const oldConn = slot.conn;
+        slot.conn = conn;
+        slot.isBot = false;
+        slot.name = effectiveName;
+        slot.avatar = avatar;
+        slot.lastSeen = Date.now();
+        if (oldConn && oldConn !== conn) { try { oldConn.close(); } catch (e) {} }
 
-      else if (data.type === 'PLAYER_SLAP') {
-        if (gameState.running && !gameState.roundLocked) {
-          if (!gameState.isTriggerActive) {
-            // False slap penalty!
-            executeFalseSlap(data.slotIndex);
-          } else {
-            // Valid slap
-            executeRegisterSlap(data.slotIndex, data.timestamp);
-          }
-        }
-      }
-
-      else if (data.type === 'SEND_STICKER') {
-        // Forward sticker broadcast to everyone
-        spawnFloatingSticker(data.slotIndex, data.emoji, data.text);
-        broadcastToClients({
-          type: 'STICKER_BROADCAST',
-          slotIndex: data.slotIndex,
-          emoji: data.emoji,
-          text: data.text
+        safeSend(conn, {
+          type: 'RECONNECT_SUCCESS',
+          yourSlotIndex: existingSlotIdx,
+          fullState: getPublicGameState()
         });
+        broadcastToClients({
+          type: 'PLAYER_RECONNECTED',
+          name: slot.name,
+          slots: getSanitizedSlots()
+        });
+
+        if (gameState.running) showToast(`${slot.name} reconectou e reassumiu sua vaga!`, 'border-mint');
+        updateOpponentsUI();
+        renderLobbySlots();
+        renderTableOverlay();
+        return;
       }
+
+      // Jogador novo não entra no meio de uma partida
+      if (gameState.running) {
+        safeSend(conn, { type: 'GAME_IN_PROGRESS' });
+        setTimeout(() => { try { conn.close(); } catch (e) {} }, 500);
+        return;
+      }
+
+      if (gameState.slots.length >= 6) {
+        safeSend(conn, { type: 'ROOM_FULL' });
+        setTimeout(() => { try { conn.close(); } catch (e) {} }, 500);
+        return;
+      }
+
+      const newSlotIdx = gameState.slots.length;
+      gameState.slots.push({
+        id: 'client_' + Math.random().toString(36).slice(2, 8),
+        userId: effectiveUserId,
+        name: effectiveName,
+        avatar: avatar,
+        isBot: false,
+        isHost: false,
+        cardsCount: 10,
+        conn: conn,
+        lastSeen: Date.now()
+      });
+
+      safeSend(conn, {
+        type: 'JOIN_ACCEPTED',
+        yourSlotIndex: newSlotIdx,
+        fullState: getPublicGameState()
+      });
+      broadcastRoomUpdate();
+
+      renderLobbySlots();
+      renderTableOverlay();
+      updateOpponentsUI();
+      showToast(`${effectiveName} entrou na sala!`, 'border-cyan');
     }
 
     function handleClientReceivedMessage(data) {
-      if (!data || !data.type) return;
+      if (!data || typeof data.type !== 'string') return;
+      if (typeof data.yourSlotIndex === 'number') gameState.mySlotIndex = data.yourSlotIndex;
 
-      if (data.type === 'JOIN_ACCEPTED' || data.type === 'RECONNECT_SUCCESS') {
-        gameState.mySlotIndex = data.yourSlotIndex;
-        applySyncedState(data.fullState);
-        renderLobbySlots();
-        renderTableOverlay();
-        updateOpponentsUI();
-        if (data.type === 'RECONNECT_SUCCESS') {
-          showToast('Você voltou à partida!', 'border-mint');
-          switchTab('play');
+      switch (data.type) {
+        case 'PING':
+          safeSend(clientConnection, { type: 'PONG' });
+          break;
+
+        case 'JOIN_ACCEPTED':
+        case 'RECONNECT_SUCCESS': {
+          pendingJoinPeer = null;
+          reconnectAttempts = 0;
+          gameState.isMultiplayer = true;
+          gameState.isHost = false;
+          tableNotice = null;
+          showRoomUI();
+          document.getElementById('btn-start-p2p-game').classList.add('hidden'); // Só o host inicia
+          saveLastRoom(currentRoomCode);
+          updateRoomHash(currentRoomCode);
+          applySyncedState(data.fullState);
+          renderLobbySlots();
+          renderTableOverlay();
+          if (gameState.running) {
+            switchTab('play');
+            showToast(data.type === 'RECONNECT_SUCCESS' ? 'Você voltou à partida!' : 'Você entrou na partida!', 'border-mint');
+          } else {
+            showToast(`Você entrou na sala ${currentRoomCode}!`, 'border-mint');
+          }
+          break;
         }
-      }
 
-      else if (data.type === 'ROOM_UPDATE') {
-        gameState.slots = data.slots;
-        renderLobbySlots();
-        renderTableOverlay();
-        updateOpponentsUI();
-      }
+        case 'ROOM_UPDATE':
+          gameState.slots = data.slots || [];
+          renderLobbySlots();
+          renderTableOverlay();
+          updateOpponentsUI();
+          updateHUD();
+          setTurnUI();
+          break;
 
-      else if (data.type === 'GAME_STARTED') {
-        document.getElementById('active-card-slot').innerHTML = '';
-        applySyncedState(data.fullState);
-        switchTab('play');
-        showToast('A partida começou!', 'border-mint');
-      }
+        case 'GAME_STARTED':
+          clearAllTimers();
+          gameState.gameId++;
+          gameState.winnerSlot = null;
+          resetRoundState();
+          applySyncedState(data.fullState);
+          localUser.stats.matches = (localUser.stats.matches || 0) + 1;
+          saveUserToStorage();
+          switchTab('play');
+          showToast('A partida começou!', 'border-mint');
+          break;
 
-      else if (data.type === 'CARD_PLAYED') {
-        gameState.currentCard = data.card;
-        gameState.wordIndex = data.wordIndex;
-        gameState.turnSlot = data.nextTurnSlot;
-        gameState.pileCount = data.pileCount;
-        gameState.slots = data.slots;
-        renderCardInCenter(data.card, data.modifier);
-        sfxCardFlip(data.wordIndex);
-        updateHUD();
-        updateOpponentsUI();
-        setTurnUI();
-      }
-
-      else if (data.type === 'TRIGGER_ACTIVATED') {
-        gameState.isTriggerActive = true;
-        gameState.currentCard = data.card;
-        activateTriggerEventVisuals(data.card);
-        setTurnUI();
-      }
-
-      else if (data.type === 'SLAP_STAMP') {
-        renderSlapStamp(data.name, data.emoji, data.color, data.rank);
-      }
-
-      else if (data.type === 'ROUND_RESOLVED') {
-        applySyncedState(data.fullState);
-        triggerDefeatMeme(data.loserSlot, data.meme);
-        setTimeout(() => {
-          gameState.roundLocked = false;
+        case 'CARD_PLAYED': {
+          const card = getCardById(data.cardId);
+          if (!card) break;
+          gameState.currentCard = card;
+          gameState.currentModifierId = data.modifierId || 'NONE';
+          gameState.wordIndex = data.wordIndex;
+          gameState.turnSlot = data.turnSlot;
+          gameState.pileCount = data.pileCount;
+          gameState.slots = data.slots || gameState.slots;
+          renderCardInCenter(card, getModifierById(gameState.currentModifierId));
+          sfxCardFlip(data.wordIndex);
           updateHUD();
           updateOpponentsUI();
           setTurnUI();
-        }, 1600);
-      }
+          break;
+        }
 
-      else if (data.type === 'STICKER_BROADCAST') {
-        spawnFloatingSticker(data.slotIndex, data.emoji, data.text);
-      }
+        case 'TRIGGER_ACTIVATED': {
+          const card = getCardById(data.cardId);
+          if (!card) break;
+          gameState.isTriggerActive = true;
+          gameState.currentCard = card;
+          gameState.slapOrder = [];
+          gameState.mySlappedThisRound = false;
+          activateTriggerEventVisuals(card);
+          setTurnUI();
+          break;
+        }
 
-      else if (data.type === 'PLAYER_DISCONNECTED') {
-        showToast(`${data.name} desconectou. O robô assumiu!`, 'border-coral');
-      }
+        case 'SLAP_STAMP':
+          gameState.slapOrder.push({ slotIndex: data.slotIndex, rank: data.rank, missed: !!data.missed });
+          renderSlapStamp(data.slotIndex, data.rank, !!data.missed);
+          break;
 
-      else if (data.type === 'PLAYER_RECONNECTED') {
-        gameState.slots = data.slots;
-        updateOpponentsUI();
-        showToast(`${data.name} voltou à sala!`, 'border-mint');
+        case 'ROUND_RESOLVED':
+          applySyncedState(data.fullState); // Já vem com turnSlot = perdedor e roundLocked = true
+          triggerDefeatMeme(data.loserSlot, DEFEAT_MEMES[data.memeIndex] || DEFEAT_MEMES[0]);
+          break;
+
+        case 'ROUND_UNLOCKED':
+          applySyncedState(data.fullState);
+          break;
+
+        case 'GAME_OVER':
+          clearAllTimers();
+          applySyncedState(data.fullState);
+          gameState.running = false;
+          gameState.winnerSlot = data.winnerSlot;
+          if (data.winnerSlot === gameState.mySlotIndex) {
+            localUser.stats.wins = (localUser.stats.wins || 0) + 1;
+            saveUserToStorage();
+          }
+          renderGameOver();
+          break;
+
+        case 'STICKER_BROADCAST':
+          if (data.slotIndex !== gameState.mySlotIndex) spawnFloatingSticker(data.slotIndex, data.emoji);
+          break;
+
+        case 'PLAYER_DISCONNECTED':
+          if (data.slots) gameState.slots = data.slots;
+          updateOpponentsUI();
+          renderLobbySlots();
+          showToast(`${data.name} desconectou. O robô assumiu!`, 'border-coral');
+          break;
+
+        case 'PLAYER_RECONNECTED':
+          if (data.slots) gameState.slots = data.slots;
+          updateOpponentsUI();
+          renderLobbySlots();
+          if (gameState.running) showToast(`${data.name} voltou à partida!`, 'border-mint');
+          break;
+
+        case 'ROOM_FULL':
+          endRoomForClient('A sala está cheia (6/6).');
+          break;
+
+        case 'GAME_IN_PROGRESS':
+          endRoomForClient('Partida em andamento. Entre quando ela terminar.');
+          break;
+
+        case 'ROOM_CLOSED':
+          endRoomForClient('O host encerrou a sala.');
+          break;
       }
     }
 
@@ -1575,27 +1964,35 @@
       }));
     }
 
+    // Snapshot sem objetos de conexão e sem HTML: cartas trafegam só pelo id
     function getPublicGameState() {
       return {
         running: gameState.running,
         turnSlot: gameState.turnSlot,
         wordIndex: gameState.wordIndex,
         pileCount: gameState.pileCount,
-        currentCard: gameState.currentCard,
+        currentCardId: gameState.currentCard ? gameState.currentCard.id : null,
+        modifierId: gameState.currentModifierId,
         isTriggerActive: gameState.isTriggerActive,
+        roundLocked: gameState.roundLocked,
+        winnerSlot: gameState.winnerSlot,
         slots: getSanitizedSlots()
       };
     }
 
     function applySyncedState(sync) {
       if (!sync) return;
-      gameState.running = sync.running;
+      gameState.running = !!sync.running;
       gameState.turnSlot = sync.turnSlot;
       gameState.wordIndex = sync.wordIndex;
       gameState.pileCount = sync.pileCount;
-      gameState.currentCard = sync.currentCard;
-      gameState.isTriggerActive = sync.isTriggerActive;
-      gameState.slots = sync.slots;
+      gameState.currentCard = getCardById(sync.currentCardId);
+      gameState.currentModifierId = sync.modifierId || 'NONE';
+      gameState.isTriggerActive = !!sync.isTriggerActive;
+      gameState.roundLocked = !!sync.roundLocked;
+      gameState.winnerSlot = (typeof sync.winnerSlot === 'number') ? sync.winnerSlot : null;
+      gameState.slots = sync.slots || [];
+      if (!gameState.isTriggerActive) gameState.gestureCompleted = true;
       updateHUD();
       updateOpponentsUI();
       setTurnUI();
@@ -1604,6 +2001,10 @@
     // =========================================================================
     // 7. LOBBY SLOTS MANAGEMENT (ADD/REMOVE BOTS UP TO 6 SLOTS)
     // =========================================================================
+    function isRemovableBot(slot) {
+      return slot && slot.isBot && String(slot.id).startsWith('bot_');
+    }
+
     function renderLobbySlots() {
       const container = document.getElementById('room-slots-grid');
       const countEl = document.getElementById('slots-count');
@@ -1611,6 +2012,8 @@
 
       countEl.textContent = gameState.slots.length;
       container.innerHTML = '';
+
+      const canEdit = gameState.isHost && !gameState.running;
 
       for (let i = 0; i < 6; i++) {
         const slot = gameState.slots[i];
@@ -1622,11 +2025,11 @@
           card.innerHTML = `
             <div class="flex items-center gap-2 min-w-0">
               <div class="w-9 h-9 rounded-xl ${slot.isBot ? 'bg-violet/20 border border-violet' : 'bg-cyan/20 border border-cyan'} flex items-center justify-center text-lg shrink-0">
-                ${slot.avatar}
+                ${escapeHtml(slot.avatar)}
               </div>
               <div class="min-w-0">
                 <div class="flex items-center gap-1">
-                  <span class="text-xs font-bold text-white truncate max-w-[85px]">${slot.name}</span>
+                  <span class="text-xs font-bold text-white truncate max-w-[85px]">${escapeHtml(slot.name)}</span>
                   ${slot.isHost ? '<span class="text-[9px] bg-electric/20 text-electric px-1 rounded font-bold">HOST</span>' : ''}
                 </div>
                 <div class="text-[9px] ${slot.isBot ? 'text-violet font-bold' : 'text-slate-400'}">
@@ -1634,12 +2037,12 @@
                 </div>
               </div>
             </div>
-            ${(gameState.isHost && slot.isBot) ? `<button onclick="removeBotFromSlot(${i})" class="text-xs text-coral font-bold px-1.5 py-0.5 rounded hover:bg-red-950">✕</button>` : ''}
+            ${(canEdit && isRemovableBot(slot)) ? `<button onclick="removeBotFromSlot(${i})" class="text-xs text-coral font-bold px-1.5 py-0.5 rounded hover:bg-red-950">✕</button>` : ''}
           `;
         } else {
-          // Empty slot
-          card.className = 'bg-surface/40 border-2 border-dashed border-slate-800 rounded-2xl p-2.5 flex items-center justify-center text-center cursor-pointer hover:border-slate-600 transition';
-          if (gameState.isHost) {
+          card.className = 'bg-surface/40 border-2 border-dashed border-slate-800 rounded-2xl p-2.5 flex items-center justify-center text-center transition';
+          if (canEdit) {
+            card.classList.add('cursor-pointer', 'hover:border-slate-600');
             card.onclick = () => addBotToNextSlot();
             card.innerHTML = `
               <div class="text-slate-500 font-bold text-xs flex items-center gap-1.5">
@@ -1652,16 +2055,27 @@
         }
         container.appendChild(card);
       }
+
+      // Botão iniciar e dica, conforme papel e estado da partida
+      const startBtn = document.getElementById('btn-start-p2p-game');
+      const hint = document.getElementById('host-hint-text');
+      startBtn.classList.toggle('hidden', !gameState.isHost);
+      startBtn.disabled = gameState.running;
+      startBtn.classList.toggle('opacity-50', gameState.running);
+      if (!gameState.isHost) hint.textContent = 'Aguardando o Host iniciar a partida...';
+      else if (gameState.running) hint.textContent = 'Partida em andamento';
+      else hint.textContent = 'Toque em slot vazio p/ adicionar bot';
     }
 
     function addBotToNextSlot() {
-      if (!gameState.isHost || gameState.slots.length >= 6) return;
-      const botIdx = gameState.slots.length;
-      const preset = BOT_PRESETS[(botIdx - 1) % BOT_PRESETS.length];
+      if (!gameState.isHost || gameState.running || gameState.slots.length >= 6) return;
+      const usedNames = gameState.slots.map(s => s.name);
+      const preset = BOT_PRESETS.find(p => !usedNames.includes(p.name + ' (Bot)')) || BOT_PRESETS[0];
+      const botId = 'bot_' + Math.random().toString(36).slice(2, 8);
 
       gameState.slots.push({
-        id: 'bot_' + botIdx,
-        userId: 'bot_' + botIdx,
+        id: botId,
+        userId: botId,
         name: preset.name + ' (Bot)',
         avatar: preset.avatar,
         isBot: true,
@@ -1670,66 +2084,66 @@
         conn: null
       });
 
-      broadcastToClients({
-        type: 'ROOM_UPDATE',
-        slots: getSanitizedSlots()
-      });
-
+      broadcastRoomUpdate();
       renderLobbySlots();
+      renderTableOverlay();
       updateOpponentsUI();
       sfxPop();
     }
 
     function removeBotFromSlot(slotIdx) {
-      if (!gameState.isHost) return;
+      if (!gameState.isHost || gameState.running) return;
+      if (slotIdx <= 0 || !isRemovableBot(gameState.slots[slotIdx])) return;
       gameState.slots.splice(slotIdx, 1);
-      broadcastToClients({
-        type: 'ROOM_UPDATE',
-        slots: getSanitizedSlots()
-      });
+      broadcastRoomUpdate(); // Cada cliente recebe seu novo yourSlotIndex
       renderLobbySlots();
+      renderTableOverlay();
       updateOpponentsUI();
     }
 
     // =========================================================================
-    // 8. CORE GAME LOOP (SOLO & MULTIPLAYER)
+    // 8. CORE GAME LOOP (SOLO & MULTIPLAYER) — SÓ O HOST MUTA O ESTADO
     // =========================================================================
     function startSoloGame() {
       initAudio();
-      clearAllTimers();
+      enableMotionSensors();
+      teardownSession(); // Sai de qualquer sala/partida anterior
+
       gameState.isMultiplayer = false;
       gameState.isHost = true;
       gameState.mySlotIndex = 0;
-
       gameState.slots = [
         { id: 'player', userId: localUser.userId, name: localUser.name, avatar: localUser.avatar, isBot: false, isHost: true, cardsCount: 10, conn: null },
         { id: 'bot_0', userId: 'bot_0', name: 'Leo', avatar: '🤖', isBot: true, isHost: false, cardsCount: 10, conn: null },
         { id: 'bot_1', userId: 'bot_1', name: 'Mia', avatar: '👾', isBot: true, isHost: false, cardsCount: 10, conn: null }
       ];
 
-      resetRoundState();
-      gameState.running = true;
-      localUser.stats.matches = (localUser.stats.matches || 0) + 1;
-      saveUserToStorage();
-
-      updateOpponentsUI();
-      updateHUD();
-      setTurnUI();
+      beginMatch();
       showToast('Sua vez! Toque no botão verde para descartar!', 'border-mint');
     }
 
     function hostStartGame() {
-      if (!gameState.isHost) return;
+      if (!gameState.isHost || gameState.running) return;
+      if (!gameState.isMultiplayer) {
+        startSoloGame();
+        return;
+      }
 
-      // If host is alone in the room, automatically add a bot so the host is never blocked!
+      // Host sozinho na sala: adiciona um bot para não ficar bloqueado
       if (gameState.slots.length < 2) {
         addBotToNextSlot();
         showToast('Adicionamos um bot para você poder jogar!', 'border-electric');
       }
 
       initAudio();
-      clearAllTimers();
+      beginMatch();
+      showToast('Partida iniciada!', 'border-mint');
+    }
 
+    function beginMatch() {
+      clearAllTimers();
+      gameState.gameId++;
+      gameState.winnerSlot = null;
       gameState.slots.forEach(s => s.cardsCount = 10);
       resetRoundState();
       gameState.running = true;
@@ -1737,18 +2151,15 @@
       localUser.stats.matches = (localUser.stats.matches || 0) + 1;
       saveUserToStorage();
 
-      document.getElementById('active-card-slot').innerHTML = '';
-
-      broadcastToClients({
-        type: 'GAME_STARTED',
-        fullState: getPublicGameState()
-      });
+      if (gameState.isMultiplayer) {
+        broadcastToClients({ type: 'GAME_STARTED', fullState: getPublicGameState() });
+      }
 
       switchTab('play');
+      renderLobbySlots();
       updateOpponentsUI();
       updateHUD();
       setTurnUI();
-      showToast('Partida iniciada!', 'border-mint');
 
       if (gameState.slots[gameState.turnSlot].isBot) {
         scheduleBotTurn();
@@ -1760,23 +2171,33 @@
       gameState.wordIndex = -1;
       gameState.pileCount = 0;
       gameState.currentCard = null;
+      gameState.currentModifierId = 'NONE';
       gameState.isTriggerActive = false;
       gameState.gestureCompleted = true;
       gameState.gestureTaps = 0;
       gameState.slapOrder = [];
       gameState.roundLocked = false;
+      gameState.mySlappedThisRound = false;
 
       document.getElementById('active-card-slot').innerHTML = '';
+      resetArenaVisuals();
+    }
+
+    function resetArenaVisuals() {
+      const ring = document.getElementById('target-ring');
+      ring.classList.remove('border-electric', 'ring-pulse');
+      ring.classList.add('border-slate-700/80');
       document.getElementById('slap-hands-layer').innerHTML = '';
       document.getElementById('gesture-prompt').classList.add('hidden');
       document.getElementById('sensor-sim-bar').classList.add('hidden');
+      document.getElementById('defeat-meme-modal').classList.add('hidden');
     }
 
     function clearAllTimers() {
       clearTimeout(gameState.botTurnTimer);
-      clearTimeout(gameState.resolveTimer);
-      gameState.botSlapTimers.forEach(t => clearTimeout(t));
-      gameState.botSlapTimers = [];
+      gameState.botTurnTimer = null;
+      gameState.pendingTimers.forEach(t => clearTimeout(t));
+      gameState.pendingTimers = [];
     }
 
     function playerPlayCard() {
@@ -1786,44 +2207,41 @@
       if (gameState.isHost) {
         executePlayCard(gameState.mySlotIndex);
       } else if (clientConnection && clientConnection.open) {
-        clientConnection.send({
-          type: 'PLAYER_PLAY_CARD',
-          slotIndex: gameState.mySlotIndex
-        });
+        clientConnection.send({ type: 'PLAYER_PLAY_CARD' });
       }
     }
 
     function executePlayCard(slotIndex) {
-      if (!gameState.isHost || !gameState.running) return;
+      if (!gameState.isHost || !gameState.running || gameState.roundLocked || gameState.isTriggerActive) return;
+      if (slotIndex !== gameState.turnSlot) return;
       const slot = gameState.slots[slotIndex];
-      if (!slot || slot.cardsCount <= 0) {
-        checkWinCondition();
+      if (!slot) return;
+      if (slot.cardsCount <= 0) {
+        finishGame(slotIndex);
         return;
       }
 
+      clearTimeout(gameState.botTurnTimer);
       slot.cardsCount--;
       gameState.pileCount++;
       gameState.wordIndex = (gameState.wordIndex + 1) % SEQUENCE.length;
       const spokenWord = SEQUENCE[gameState.wordIndex];
 
-      const card = pickNextCard();
-      gameState.currentCard = card;
-
+      const card = pickNextCard(spokenWord);
       const modifier = card.special
         ? CHAOS_MODIFIERS[0]
         : CHAOS_MODIFIERS[Math.floor(Math.random() * CHAOS_MODIFIERS.length)];
+      gameState.currentCard = card;
+      gameState.currentModifierId = modifier.id;
 
-      // Calculate next turn
-      const nextTurnSlot = (gameState.turnSlot + 1) % gameState.slots.length;
-      gameState.turnSlot = nextTurnSlot;
+      gameState.turnSlot = (gameState.turnSlot + 1) % gameState.slots.length;
 
-      // Broadcast card reveal
       broadcastToClients({
         type: 'CARD_PLAYED',
-        card: card,
-        modifier: modifier,
+        cardId: card.id,
+        modifierId: modifier.id,
         wordIndex: gameState.wordIndex,
-        nextTurnSlot: nextTurnSlot,
+        turnSlot: gameState.turnSlot,
         pileCount: gameState.pileCount,
         slots: getSanitizedSlots()
       });
@@ -1834,77 +2252,95 @@
       updateOpponentsUI();
 
       const isMatch = (card.id === spokenWord) || Boolean(card.special);
-
       if (isMatch) {
         activateTriggerEvent(card);
       } else {
-        setTurnUI();
-        if (gameState.slots[gameState.turnSlot].isBot) {
-          scheduleBotTurn();
-        }
+        advanceTurn();
       }
     }
 
-    function pickNextCard() {
-      const nextWordIdx = (gameState.wordIndex + 1) % SEQUENCE.length;
-      const expectedWord = SEQUENCE[nextWordIdx];
-      const roll = Math.random();
+    function advanceTurn() {
+      // Quem chega à própria vez sem cartas sobreviveu a uma volta inteira: vence
+      const current = gameState.slots[gameState.turnSlot];
+      if (current && current.cardsCount <= 0) {
+        finishGame(gameState.turnSlot);
+        return;
+      }
+      setTurnUI();
+      if (current && current.isBot) {
+        scheduleBotTurn();
+      }
+    }
 
+    // spokenWord = palavra falada NESTA jogada (wordIndex já avançou)
+    function pickNextCard(spokenWord) {
+      const roll = Math.random();
       if (roll < 0.28) {
-        return CARDS_DATA[expectedWord];
+        return CARDS_DATA[spokenWord];
       } else if (roll < 0.44) {
         const specials = ['GORILA', 'NARVAL', 'MARMOTA'];
         return CARDS_DATA[specials[Math.floor(Math.random() * specials.length)]];
       } else {
-        const others = SEQUENCE.filter(w => w !== expectedWord);
+        const others = SEQUENCE.filter(w => w !== spokenWord);
         return CARDS_DATA[others[Math.floor(Math.random() * others.length)]];
       }
     }
 
     function scheduleBotTurn() {
       clearTimeout(gameState.botTurnTimer);
+      const gid = gameState.gameId;
       gameState.botTurnTimer = setTimeout(() => {
-        if (gameState.running && !gameState.roundLocked && !gameState.isTriggerActive) {
+        if (gid !== gameState.gameId) return;
+        const slot = gameState.slots[gameState.turnSlot];
+        // Confere se ainda é bot: o humano pode ter reconectado nesse meio tempo
+        if (gameState.running && !gameState.roundLocked && !gameState.isTriggerActive && slot && slot.isBot) {
           executePlayCard(gameState.turnSlot);
         }
       }, 1000 + Math.random() * 350);
+    }
+
+    function hasSlapped(slotIndex) {
+      return gameState.slapOrder.some(s => s.slotIndex === slotIndex);
     }
 
     function activateTriggerEvent(card) {
       gameState.isTriggerActive = true;
       gameState.slapOrder = [];
       gameState.gestureTaps = 0;
+      gameState.mySlappedThisRound = false;
 
-      broadcastToClients({
-        type: 'TRIGGER_ACTIVATED',
-        card: card
-      });
+      broadcastToClients({ type: 'TRIGGER_ACTIVATED', cardId: card.id });
 
       activateTriggerEventVisuals(card);
       setTurnUI();
 
-      // Schedule all BOT slaps with realistic human variation (700ms - 1500ms)
+      // Bots batem com atraso humano (720ms - 1500ms)
       gameState.slots.forEach((s, idx) => {
-        if (s.isBot) {
-          const delay = 720 + Math.random() * 780;
-          gameState.botSlapTimers.push(setTimeout(() => {
-            if (gameState.isTriggerActive && !gameState.roundLocked) {
-              executeRegisterSlap(idx, performance.now());
-            }
-          }, delay));
-        }
+        if (s.isBot) scheduleBotSlap(idx);
       });
 
-      // Auto resolve if last player takes too long (2.8s)
-      gameState.resolveTimer = setTimeout(() => {
-        if (gameState.isTriggerActive) {
-          // Find first slot that hasn't slapped
-          const unslappedSlot = gameState.slots.findIndex((s, idx) => !gameState.slapOrder.some(so => so.slotIndex === idx));
-          if (unslappedSlot !== -1) {
-            executeRegisterSlap(unslappedSlot, performance.now() + 9999);
-          }
+      // Quem não bater a tempo é registrado como "não bateu"
+      gameTimeout(resolveMissingSlaps, RESOLVE_TIMEOUT_MS);
+    }
+
+    function scheduleBotSlap(idx) {
+      gameTimeout(() => {
+        const s = gameState.slots[idx];
+        if (s && s.isBot && gameState.isTriggerActive && !gameState.roundLocked) {
+          executeRegisterSlap(idx);
         }
-      }, 2800);
+      }, 720 + Math.random() * 780);
+    }
+
+    function resolveMissingSlaps() {
+      if (!gameState.isTriggerActive || gameState.roundLocked) return;
+      const missing = gameState.slots.map((s, idx) => idx).filter(idx => !hasSlapped(idx));
+      // Entre os que não bateram, o último sorteado leva o monte
+      for (let i = missing.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [missing[i], missing[j]] = [missing[j], missing[i]];
+      }
+      missing.forEach(idx => executeRegisterSlap(idx, { missed: true }));
     }
 
     function activateTriggerEventVisuals(card) {
@@ -1912,6 +2348,7 @@
       ring.classList.add('border-electric', 'ring-pulse');
       ring.classList.remove('border-slate-700/80');
 
+      gameState.gestureTaps = 0;
       if (card.special) {
         sfxSpecialAlert();
         vibrate([40, 40, 60]);
@@ -1932,18 +2369,21 @@
       }
     }
 
-    // Handle Tap on Center Pile
+    // ----- Entrada: toque, swipe, sacudida e teclado -----
     const centerZone = document.getElementById('center-pile-zone');
-    centerZone.addEventListener('click', () => {
+    let suppressClickUntil = 0;
+    let swipeStart = null;
+
+    function onArenaTap() {
       if (!gameState.running || gameState.roundLocked) return;
 
-      // Special card gesture check
+      // Carta especial: gesto antes da batida
       if (gameState.isTriggerActive && !gameState.gestureCompleted && gameState.currentCard) {
         if (gameState.currentCard.gestureType === 'double_tap') {
           gameState.gestureTaps++;
           vibrate(25);
           playTone(440 + gameState.gestureTaps * 140, 'sine', 0.08, 0.2);
-          document.getElementById('gesture-progress').textContent = `${gameState.gestureTaps}/2`;
+          document.getElementById('gesture-progress').textContent = `${Math.min(gameState.gestureTaps, 2)}/2`;
           if (gameState.gestureTaps >= 2) {
             completeSpecialGesture();
           }
@@ -1955,6 +2395,84 @@
       }
 
       handleLocalSlap();
+    }
+
+    centerZone.addEventListener('click', () => {
+      if (Date.now() < suppressClickUntil) return; // Clique gerado pelo fim de um swipe
+      onArenaTap();
+    });
+
+    // Swipe para cima (Narval) com dedo ou mouse
+    centerZone.addEventListener('pointerdown', (e) => {
+      swipeStart = { x: e.clientX, y: e.clientY, t: Date.now() };
+    });
+    centerZone.addEventListener('pointerup', (e) => {
+      if (!swipeStart) return;
+      const dx = e.clientX - swipeStart.x;
+      const dy = e.clientY - swipeStart.y;
+      const dt = Date.now() - swipeStart.t;
+      swipeStart = null;
+      if (dy < -40 && Math.abs(dy) > Math.abs(dx) && dt < 800) {
+        suppressClickUntil = Date.now() + 400;
+        triggerGestureAction('swipe');
+      }
+    });
+    centerZone.addEventListener('pointercancel', () => { swipeStart = null; });
+
+    // Sacudida (Marmota) pelo acelerômetro
+    let motionEnabled = false;
+    let lastShakeAt = 0;
+
+    function handleDeviceMotion(e) {
+      const a = e.acceleration;
+      let magnitude = 0;
+      if (a && a.x !== null) {
+        magnitude = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+      } else if (e.accelerationIncludingGravity) {
+        const g = e.accelerationIncludingGravity;
+        magnitude = Math.max(0, Math.sqrt(g.x * g.x + g.y * g.y + g.z * g.z) - 9.8);
+      }
+      if (magnitude > 15 && Date.now() - lastShakeAt > 600) {
+        lastShakeAt = Date.now();
+        triggerGestureAction('shake');
+      }
+    }
+
+    // Precisa ser chamado num gesto do usuário (iOS pede permissão)
+    function enableMotionSensors() {
+      if (motionEnabled || typeof window.DeviceMotionEvent === 'undefined') return;
+      motionEnabled = true;
+      const attach = () => window.addEventListener('devicemotion', handleDeviceMotion);
+      try {
+        if (typeof DeviceMotionEvent.requestPermission === 'function') {
+          DeviceMotionEvent.requestPermission()
+            .then(state => { if (state === 'granted') attach(); })
+            .catch(() => {});
+        } else {
+          attach();
+        }
+      } catch (e) {}
+    }
+
+    // Teclado: Espaço bate, ↑ joga carta (ou faz o swipe), S sacode
+    document.addEventListener('keydown', (e) => {
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.repeat) return;
+      if (document.getElementById('view-play').classList.contains('hidden')) return;
+
+      const pendingGesture = gameState.isTriggerActive && !gameState.gestureCompleted && gameState.currentCard
+        ? gameState.currentCard.gestureType : null;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        onArenaTap();
+      } else if (e.code === 'ArrowUp') {
+        e.preventDefault();
+        if (pendingGesture === 'swipe') triggerGestureAction('swipe');
+        else playerPlayCard();
+      } else if (e.key === 's' || e.key === 'S') {
+        triggerGestureAction('shake');
+      }
     });
 
     function completeSpecialGesture() {
@@ -1967,6 +2485,7 @@
     }
 
     function triggerGestureAction(type) {
+      if (!gameState.running || gameState.roundLocked) return;
       if (!gameState.isTriggerActive || gameState.gestureCompleted || !gameState.currentCard) return;
       if (gameState.currentCard.gestureType === type) {
         completeSpecialGesture();
@@ -1974,73 +2493,72 @@
     }
 
     function handleLocalSlap() {
-      localUser.stats.slaps = (localUser.stats.slaps || 0) + 1;
-      saveUserToStorage();
+      if (!gameState.running || gameState.roundLocked) return;
+
+      if (gameState.isTriggerActive) {
+        if (gameState.mySlappedThisRound) return; // Uma batida por rodada
+        gameState.mySlappedThisRound = true;
+        localUser.stats.slaps = (localUser.stats.slaps || 0) + 1;
+        saveUserToStorage();
+      } else if (gameState.pileCount <= 0) {
+        return; // Monte vazio: não há o que queimar
+      }
 
       if (gameState.isHost) {
-        if (!gameState.isTriggerActive) {
-          if (gameState.pileCount > 0) executeFalseSlap(gameState.mySlotIndex);
-        } else {
-          executeRegisterSlap(gameState.mySlotIndex, performance.now());
-        }
+        processSlap(gameState.mySlotIndex);
       } else if (clientConnection && clientConnection.open) {
-        clientConnection.send({
-          type: 'PLAYER_SLAP',
-          slotIndex: gameState.mySlotIndex,
-          timestamp: performance.now()
-        });
+        clientConnection.send({ type: 'PLAYER_SLAP' });
+      }
+    }
+
+    // Host: batida válida (com gatilho) ou queimada (sem gatilho e com monte)
+    function processSlap(slotIndex) {
+      if (!gameState.isHost || !gameState.running || gameState.roundLocked) return;
+      if (gameState.isTriggerActive) {
+        executeRegisterSlap(slotIndex);
+      } else if (gameState.pileCount > 0) {
+        executeFalseSlap(slotIndex);
       }
     }
 
     function executeFalseSlap(slotIndex) {
-      if (!gameState.isHost) return;
+      if (!gameState.isHost || !gameState.running || gameState.roundLocked || gameState.isTriggerActive) return;
+      if (gameState.pileCount <= 0 || !gameState.slots[slotIndex]) return;
       gameState.roundLocked = true;
       clearAllTimers();
-
-      const slot = gameState.slots[slotIndex];
-      const randomMeme = DEFEAT_MEMES[5]; // Queimou a largada
-
-      executeResolvePileToLoser(slotIndex, randomMeme);
+      executeResolvePileToLoser(slotIndex, FALSE_START_MEME_INDEX);
     }
 
-    function executeRegisterSlap(slotIndex, timestamp) {
+    function executeRegisterSlap(slotIndex, opts = {}) {
       if (!gameState.isHost || !gameState.isTriggerActive || gameState.roundLocked) return;
-      if (gameState.slapOrder.some(s => s.slotIndex === slotIndex)) return;
+      if (!gameState.slots[slotIndex] || hasSlapped(slotIndex)) return;
 
-      const slot = gameState.slots[slotIndex];
       const rank = gameState.slapOrder.length + 1;
-      const color = ['#06D6A0', '#3A86FF', '#8338EC', '#FFD60A', '#FF4D6D', '#F97316'][slotIndex % 6];
+      const missed = Boolean(opts.missed);
+      gameState.slapOrder.push({ slotIndex, rank, missed });
 
-      gameState.slapOrder.push({ slotIndex, name: slot.name, emoji: slot.avatar, color, rank, timestamp });
+      broadcastToClients({ type: 'SLAP_STAMP', slotIndex, rank, missed });
+      renderSlapStamp(slotIndex, rank, missed);
 
-      // Broadcast slap stamp to all
-      broadcastToClients({
-        type: 'SLAP_STAMP',
-        name: slot.name,
-        emoji: slot.avatar,
-        color: color,
-        rank: rank
-      });
-
-      renderSlapStamp(slot.name, slot.avatar, color, rank);
-
-      // Once all participants have slapped, resolve to last!
+      // Todos registrados: o último leva o monte
       if (gameState.slapOrder.length >= gameState.slots.length) {
         clearAllTimers();
         gameState.roundLocked = true;
-        const loserSlap = gameState.slapOrder[gameState.slapOrder.length - 1];
-        const randomMeme = DEFEAT_MEMES[Math.floor(Math.random() * (DEFEAT_MEMES.length - 1))];
-
-        setTimeout(() => {
-          executeResolvePileToLoser(loserSlap.slotIndex, randomMeme);
-        }, 850);
+        const loserSlotIdx = gameState.slapOrder[gameState.slapOrder.length - 1].slotIndex;
+        const memeIndex = Math.floor(Math.random() * FALSE_START_MEME_INDEX); // Exclui "queimou a largada"
+        gameTimeout(() => executeResolvePileToLoser(loserSlotIdx, memeIndex), RESOLVE_DELAY_MS);
       }
     }
 
-    function renderSlapStamp(name, emoji, color, rank) {
-      sfxSlap();
-      vibrate(40);
+    function renderSlapStamp(slotIndex, rank, missed) {
+      const slot = gameState.slots[slotIndex];
+      if (!slot) return;
+      if (!missed) {
+        sfxSlap();
+        vibrate(40);
+      }
 
+      const color = SLAP_COLORS[slotIndex % SLAP_COLORS.length];
       const layer = document.getElementById('slap-hands-layer');
       const badge = document.createElement('div');
       const rot = (Math.random() * 24 - 12).toFixed(1);
@@ -2048,40 +2566,51 @@
       const offsetY = (Math.random() * 20 - 10).toFixed(0);
 
       badge.style.cssText = `--slap-rot: ${rot}deg; transform: translate(${offsetX}px, ${offsetY}px); border-color: ${color};`;
-      badge.className = 'animate-slap absolute px-3 py-1.5 rounded-2xl bg-void/95 border-2 shadow-2xl flex items-center gap-1.5';
+      badge.className = `animate-slap absolute px-3 py-1.5 rounded-2xl bg-void/95 border-2 shadow-2xl flex items-center gap-1.5 ${missed ? 'opacity-70' : ''}`;
       badge.innerHTML = `
-        <span class="text-lg">${emoji}</span>
+        <span class="text-lg">${escapeHtml(slot.avatar)}</span>
         <div class="text-left">
-          <div class="text-[11px] font-extrabold text-white leading-none">${name}</div>
-          <div class="text-[9px] font-bold" style="color: ${color}">${rank}º a bater</div>
+          <div class="text-[11px] font-extrabold text-white leading-none">${escapeHtml(slot.name)}</div>
+          <div class="text-[9px] font-bold" style="color: ${color}">${missed ? '😴 não bateu' : `${rank}º a bater`}</div>
         </div>
       `;
       layer.appendChild(badge);
     }
 
-    function executeResolvePileToLoser(loserSlotIdx, meme) {
+    function executeResolvePileToLoser(loserSlotIdx, memeIndex) {
       const loser = gameState.slots[loserSlotIdx];
-      const wonCards = gameState.pileCount;
-      loser.cardsCount += wonCards;
+      if (!loser) return;
+      loser.cardsCount += gameState.pileCount;
       gameState.pileCount = 0;
       gameState.isTriggerActive = false;
       gameState.gestureCompleted = true;
       gameState.wordIndex = -1;
+      gameState.slapOrder = [];
+      gameState.currentCard = null;
+      gameState.currentModifierId = 'NONE';
+      gameState.roundLocked = true;
+      gameState.turnSlot = loserSlotIdx; // Já vai no snapshot: clientes sabem de quem é a vez
 
-      // Broadcast resolution
       broadcastToClients({
         type: 'ROUND_RESOLVED',
         loserSlot: loserSlotIdx,
-        meme: meme,
+        memeIndex: memeIndex,
         fullState: getPublicGameState()
       });
 
-      triggerDefeatMeme(loserSlotIdx, meme);
+      triggerDefeatMeme(loserSlotIdx, DEFEAT_MEMES[memeIndex]);
 
-      setTimeout(() => {
-        if (checkWinCondition()) return;
-        gameState.turnSlot = loserSlotIdx;
+      gameTimeout(() => {
         gameState.roundLocked = false;
+
+        // Quem zerou e não foi o último a bater vence
+        const winnerIdx = gameState.slots.findIndex(s => s.cardsCount <= 0);
+        if (winnerIdx !== -1) {
+          finishGame(winnerIdx);
+          return;
+        }
+
+        broadcastToClients({ type: 'ROUND_UNLOCKED', fullState: getPublicGameState() });
         updateHUD();
         updateOpponentsUI();
         setTurnUI();
@@ -2089,29 +2618,22 @@
         if (gameState.slots[gameState.turnSlot].isBot) {
           scheduleBotTurn();
         }
-      }, 1600);
+      }, ROUND_UNLOCK_MS);
     }
 
     function triggerDefeatMeme(loserSlotIdx, meme) {
+      const loser = gameState.slots[loserSlotIdx];
+      if (!loser || !meme) return;
       sfxPenalty();
       vibrate([90, 60, 110]);
 
-      const loser = gameState.slots[loserSlotIdx];
       const frame = document.getElementById('phone-frame');
       frame.classList.add('animate-shake');
       setTimeout(() => frame.classList.remove('animate-shake'), 350);
 
-      // Clean arena
-      const ring = document.getElementById('target-ring');
-      ring.classList.remove('border-electric', 'ring-pulse');
-      ring.classList.add('border-slate-700/80');
-
-      document.getElementById('gesture-prompt').classList.add('hidden');
-      document.getElementById('sensor-sim-bar').classList.add('hidden');
-      document.getElementById('slap-hands-layer').innerHTML = '';
+      resetArenaVisuals();
       document.getElementById('active-card-slot').innerHTML = '';
 
-      // Defeat Meme Modal
       const modal = document.getElementById('defeat-meme-modal');
       document.getElementById('defeat-meme-icon').textContent = meme.emoji;
       document.getElementById('defeat-meme-title').textContent = meme.title;
@@ -2119,44 +2641,64 @@
       document.getElementById('defeat-meme-sub').textContent = meme.sub;
 
       modal.classList.remove('hidden');
-      setTimeout(() => modal.classList.add('hidden'), 1500);
+      clearTimeout(modal._t);
+      modal._t = setTimeout(() => modal.classList.add('hidden'), 1500);
 
       updateHUD();
       updateOpponentsUI();
     }
 
-    function checkWinCondition() {
-      const winnerIdx = gameState.slots.findIndex(s => s.cardsCount === 0);
-      if (winnerIdx !== -1) {
-        gameState.running = false;
-        clearAllTimers();
-        const winner = gameState.slots[winnerIdx];
-        const isMe = winnerIdx === gameState.mySlotIndex;
+    // Host: encerra a partida e avisa todos os clientes
+    function finishGame(winnerIdx) {
+      if (!gameState.isHost || !gameState.slots[winnerIdx]) return;
+      clearAllTimers();
+      gameState.running = false;
+      gameState.isTriggerActive = false;
+      gameState.roundLocked = false;
+      gameState.winnerSlot = winnerIdx;
 
-        if (isMe) {
-          localUser.stats.wins = (localUser.stats.wins || 0) + 1;
-          saveUserToStorage();
-        }
+      broadcastToClients({ type: 'GAME_OVER', winnerSlot: winnerIdx, fullState: getPublicGameState() });
 
-        const slot = document.getElementById('active-card-slot');
-        slot.innerHTML = `
-          <div class="w-full h-full rounded-[26px] bg-gradient-to-br from-surface to-cardbg border-2 border-electric neo-shadow flex flex-col items-center justify-center p-3 text-center z-20">
-            <div class="text-4xl mb-1">${isMe ? '🏆' : '👑'}</div>
-            <h2 class="font-display font-bold text-base text-electric leading-tight mb-1">
-              ${winner.name.toUpperCase()} VENCEU!
-            </h2>
-            <p class="text-[10px] text-slate-300 mb-3">
-              Zerou todas as cartas do baralho primeiro!
-            </p>
-            <button onclick="${gameState.isHost ? 'hostStartGame()' : 'startSoloGame()'}" class="w-full py-2.5 rounded-xl bg-mint text-void font-display font-bold text-xs neo-shadow-sm neo-active">
-              JOGAR NOVAMENTE
-            </button>
-          </div>
-        `;
-        setTurnUI();
-        return true;
+      if (winnerIdx === gameState.mySlotIndex) {
+        localUser.stats.wins = (localUser.stats.wins || 0) + 1;
+        saveUserToStorage();
       }
-      return false;
+      renderGameOver();
+      renderLobbySlots();
+    }
+
+    // Tela de vitória (host, solo e clientes)
+    function renderGameOver() {
+      const winner = gameState.slots[gameState.winnerSlot];
+      if (!winner) return;
+      const isMe = gameState.winnerSlot === gameState.mySlotIndex;
+      resetArenaVisuals();
+      if (isMe) sfxWinRound();
+
+      let action;
+      if (!gameState.isMultiplayer) {
+        action = `<button onclick="startSoloGame()" class="w-full py-2.5 rounded-xl bg-mint text-void font-display font-bold text-xs neo-shadow-sm neo-active">JOGAR NOVAMENTE</button>`;
+      } else if (gameState.isHost) {
+        action = `<button onclick="hostStartGame()" class="w-full py-2.5 rounded-xl bg-mint text-void font-display font-bold text-xs neo-shadow-sm neo-active">JOGAR NOVAMENTE</button>`;
+      } else {
+        action = `<p class="text-[10px] text-slate-400 font-bold">Aguardando o host iniciar outra partida...</p>`;
+      }
+
+      document.getElementById('active-card-slot').innerHTML = `
+        <div class="w-full h-full rounded-[26px] bg-gradient-to-br from-surface to-cardbg border-2 border-electric neo-shadow flex flex-col items-center justify-center p-3 text-center z-20">
+          <div class="text-4xl mb-1">${isMe ? '🏆' : '👑'}</div>
+          <h2 class="font-display font-bold text-base text-electric leading-tight mb-1">
+            ${escapeHtml(winner.name.toUpperCase())} VENCEU!
+          </h2>
+          <p class="text-[10px] text-slate-300 mb-3">
+            Zerou todas as cartas do baralho primeiro!
+          </p>
+          ${action}
+        </div>
+      `;
+      updateHUD();
+      updateOpponentsUI();
+      setTurnUI();
     }
 
     // =========================================================================
@@ -2167,38 +2709,44 @@
       drawer.classList.toggle('hidden');
     }
 
-    function sendSticker(emoji, text) {
+    function sendSticker(emoji) {
       toggleStickerDrawer();
-      sfxPop();
+      if (!STICKERS[emoji]) return;
 
-      if (gameState.isHost) {
-        spawnFloatingSticker(gameState.mySlotIndex, emoji, text);
-        broadcastToClients({
-          type: 'STICKER_BROADCAST',
-          slotIndex: gameState.mySlotIndex,
-          emoji: emoji,
-          text: text
-        });
-      } else if (clientConnection && clientConnection.open) {
-        spawnFloatingSticker(gameState.mySlotIndex, emoji, text);
-        clientConnection.send({
-          type: 'SEND_STICKER',
-          slotIndex: gameState.mySlotIndex,
-          emoji: emoji,
-          text: text
-        });
-      } else {
-        // Solo mode
-        spawnFloatingSticker(0, emoji, text);
+      const now = Date.now();
+      if (now - lastStickerAt < STICKER_COOLDOWN_MS) {
+        showToast('Calma! Aguarde um pouco para outro sticker.', 'border-electric');
+        return;
+      }
+      lastStickerAt = now;
+
+      spawnFloatingSticker(gameState.mySlotIndex, emoji);
+      if (gameState.isMultiplayer && gameState.isHost) {
+        broadcastToClients({ type: 'STICKER_BROADCAST', slotIndex: gameState.mySlotIndex, emoji });
+      } else if (gameState.isMultiplayer && clientConnection && clientConnection.open) {
+        clientConnection.send({ type: 'SEND_STICKER', emoji });
       }
     }
 
-    function spawnFloatingSticker(slotIndex, emoji, text) {
+    // Host: valida e repassa sticker de um cliente (lista permitida + cooldown)
+    function relaySticker(slotIndex, emoji) {
+      const slot = gameState.slots[slotIndex];
+      if (!slot || !STICKERS[emoji]) return;
+      const now = Date.now();
+      if (slot.lastStickerAt && now - slot.lastStickerAt < STICKER_COOLDOWN_MS - 200) return;
+      slot.lastStickerAt = now;
+
+      spawnFloatingSticker(slotIndex, emoji);
+      broadcastToClients({ type: 'STICKER_BROADCAST', slotIndex, emoji });
+    }
+
+    function spawnFloatingSticker(slotIndex, emoji) {
+      if (!STICKERS[emoji]) return;
       const layer = document.getElementById('floating-effects-layer');
       const bubble = document.createElement('div');
       sfxPop();
 
-      // Position bubble relative to slot box or bottom if it's me
+      // Bolha sobe do próprio HUD (eu) ou da faixa de oponentes
       const isMe = slotIndex === gameState.mySlotIndex;
       const x = isMe ? 50 : (20 + (slotIndex * 16) % 60);
       const y = isMe ? 85 : 12;
@@ -2206,10 +2754,14 @@
       bubble.style.left = `${x}%`;
       bubble.style.top = `${y}%`;
       bubble.className = 'animate-sticker absolute px-3 py-1.5 rounded-2xl bg-void/90 border-2 border-electric text-white shadow-2xl flex items-center gap-1.5 pointer-events-none z-50';
-      bubble.innerHTML = `
-        <span class="text-xl">${emoji}</span>
-        <span class="text-[10px] font-extrabold">${text}</span>
-      `;
+
+      const icon = document.createElement('span');
+      icon.className = 'text-xl';
+      icon.textContent = emoji;
+      const label = document.createElement('span');
+      label.className = 'text-[10px] font-extrabold';
+      label.textContent = STICKERS[emoji];
+      bubble.append(icon, label);
       layer.appendChild(bubble);
 
       setTimeout(() => bubble.remove(), 1900);
@@ -2219,13 +2771,9 @@
     // 10. UI UPDATERS (HUD, CARDS & OPPONENTS GRID)
     // =========================================================================
     function updateHUD() {
-      // My card count
       const mySlot = gameState.slots[gameState.mySlotIndex];
-      if (mySlot) {
-        document.getElementById('player-count').textContent = mySlot.cardsCount;
-      }
+      document.getElementById('player-count').textContent = mySlot ? mySlot.cardsCount : 10;
 
-      // Sequence pills
       SEQUENCE.forEach((word, idx) => {
         const pill = document.getElementById(`seq-${idx}`);
         if (idx === gameState.wordIndex) {
@@ -2243,46 +2791,50 @@
       } else {
         spokenEl.textContent = 'PRONTO?';
       }
+
+      const badge = document.getElementById('chaos-badge');
+      const modifier = getModifierById(gameState.currentModifierId);
+      badge.textContent = gameState.currentCard ? modifier.label : 'NORMAL';
     }
 
     function updateOpponentsUI() {
       const container = document.getElementById('opponents-bar');
       if (!container) return;
 
-      // Filter opponents (all slots except mySlotIndex)
-      const opponents = gameState.slots.map((s, idx) => ({ ...s, slotIndex: idx })).filter(s => s.slotIndex !== gameState.mySlotIndex);
+      const opponents = gameState.slots
+        .map((s, idx) => ({ ...s, slotIndex: idx }))
+        .filter(s => s.slotIndex !== gameState.mySlotIndex);
 
       container.className = 'grid grid-cols-3 gap-1.5 z-20';
       container.innerHTML = '';
 
-      // Central pile box
       const pileBox = document.createElement('div');
       pileBox.className = 'bg-cardbg border border-slate-700/80 rounded-2xl p-1.5 flex flex-col items-center justify-center text-center';
       pileBox.innerHTML = `
         <span class="text-[8px] uppercase tracking-wider font-bold text-slate-400">Monte</span>
         <div class="flex items-baseline gap-1">
-          <span id="pile-count" class="font-display font-bold text-base text-electric leading-none">${gameState.pileCount}</span>
+          <span id="pile-count" class="font-display font-bold text-base text-electric leading-none">${Number(gameState.pileCount) || 0}</span>
           <span class="text-[8px] text-slate-400">cartas</span>
         </div>
       `;
       container.appendChild(pileBox);
 
       opponents.forEach(op => {
-        const isTurn = gameState.turnSlot === op.slotIndex;
+        const isTurn = gameState.running && gameState.turnSlot === op.slotIndex;
         const box = document.createElement('div');
         box.className = `bg-surface border ${isTurn ? 'border-electric bg-electric/10 ring-2 ring-electric/30' : 'border-slate-800'} rounded-2xl p-1.5 flex items-center gap-1.5 transition-all`;
         box.innerHTML = `
           <div class="w-7 h-7 rounded-xl ${op.isBot ? 'bg-violet/20 border border-violet/40' : 'bg-cyan/20 border border-cyan/40'} flex items-center justify-center text-xs shrink-0">
-            ${op.avatar}
+            ${escapeHtml(op.avatar)}
           </div>
           <div class="min-w-0 flex-1">
             <div class="text-[10px] font-bold text-slate-200 truncate flex items-center gap-1">
-              <span>${op.name}</span>
+              <span class="truncate">${escapeHtml(op.name)}</span>
               ${op.isBot ? '<span class="text-[7px] text-violet font-mono">BOT</span>' : ''}
             </div>
             <div class="flex items-center gap-1">
               <span class="text-[9px] text-slate-400">Cartas:</span>
-              <span class="text-[11px] font-display font-bold text-cyan">${op.cardsCount}</span>
+              <span class="text-[11px] font-display font-bold text-cyan">${Number(op.cardsCount) || 0}</span>
             </div>
           </div>
         `;
@@ -2294,14 +2846,29 @@
       const btn = document.getElementById('btn-play-card');
       const btnText = document.getElementById('play-btn-text');
       const btnIcon = document.getElementById('play-btn-icon');
+      const disabledClass = 'flex-1 py-3 px-3 rounded-2xl bg-slate-800 text-slate-500 font-display font-bold text-xs border border-slate-700 transition-all flex items-center justify-center gap-1.5 opacity-60';
 
-      if (!gameState.running || gameState.roundLocked || gameState.isTriggerActive) {
+      if (!gameState.running) {
         btn.disabled = true;
-        btn.className = 'flex-1 py-3 px-3 rounded-2xl bg-slate-800 text-slate-500 font-display font-bold text-xs border border-slate-700 transition-all flex items-center justify-center gap-1.5 opacity-60';
-        if (gameState.isTriggerActive) {
-          btnIcon.textContent = '⚡';
-          btnText.textContent = 'BATA NO CENTRO!';
-        }
+        btn.className = disabledClass;
+        btnIcon.textContent = gameState.winnerSlot !== null ? '🏁' : '⏳';
+        btnText.textContent = gameState.winnerSlot !== null ? 'Fim de partida' : 'Aguardando início...';
+        return;
+      }
+
+      if (gameState.isTriggerActive) {
+        btn.disabled = true;
+        btn.className = disabledClass;
+        btnIcon.textContent = '⚡';
+        btnText.textContent = 'BATA NO CENTRO!';
+        return;
+      }
+
+      if (gameState.roundLocked) {
+        btn.disabled = true;
+        btn.className = disabledClass;
+        btnIcon.textContent = '⏳';
+        btnText.textContent = 'Recolhendo o monte...';
         return;
       }
 
@@ -2325,6 +2892,7 @@
       const slot = document.getElementById('active-card-slot');
       const rot = (Math.random() * 10 - 5).toFixed(1);
 
+      // card e modifier vêm SEMPRE das tabelas locais (CARDS_DATA / CHAOS_MODIFIERS)
       slot.innerHTML = `
         <div id="thrown-card" style="--card-rot: ${rot}deg; border-color: ${card.border};"
              class="animate-card-throw w-full h-full rounded-[26px] bg-gradient-to-br ${card.bg} border-4 neo-shadow flex flex-col items-center justify-between p-3 select-none ${modifier.class}">
@@ -2332,7 +2900,7 @@
             <span class="font-display font-bold text-[10px] px-2 py-0.5 rounded-lg bg-void/25 ${card.textCol}">${card.special ? 'ESPECIAL' : 'CARTA'}</span>
             <span class="font-display font-bold text-xs ${card.textCol}">★</span>
           </div>
-          
+
           <div class="my-auto flex items-center justify-center transform scale-100">
             ${card.svg}
           </div>
@@ -2357,17 +2925,20 @@
     function showToast(msg, borderColor = 'border-electric') {
       const toast = document.getElementById('arena-toast');
       toast.textContent = msg;
-      toast.className = `absolute -top-1 z-30 pointer-events-none transition-all duration-200 bg-void/95 border-2 ${borderColor} text-white px-3 py-1 rounded-full text-xs font-extrabold shadow-lg text-center max-w-[92%] opacity-100 translate-y-0`;
+      toast.className = `absolute top-[112px] left-1/2 -translate-x-1/2 z-[60] pointer-events-none transition-opacity duration-200 bg-void/95 border-2 ${borderColor} text-white px-3 py-1 rounded-full text-xs font-extrabold shadow-lg text-center w-max max-w-[92%] opacity-100`;
       clearTimeout(toast._t);
       toast._t = setTimeout(() => {
         toast.classList.remove('opacity-100');
         toast.classList.add('opacity-0');
-      }, 1800);
+      }, 2200);
     }
 
     function switchTab(tabName) {
       if (tabName === 'play' && !gameState.running) {
         renderTableOverlay();
+      }
+      if (tabName === 'lobby') {
+        renderRejoinOption();
       }
       ['play', 'lobby', 'visual', 'arch'].forEach(t => {
         const view = document.getElementById(`view-${t}`);
@@ -2398,11 +2969,12 @@
     window.addEventListener('DOMContentLoaded', () => {
       initUserAccount();
       renderTableOverlay();
+      renderRejoinOption();
 
-      // Check URL Hash for direct invite link (e.g. #sala=TACO5)
+      // Link de convite direto (ex: #sala=TACO5) — também usado ao recarregar a página na sala
       const hash = window.location.hash;
       if (hash.includes('sala=')) {
-        const code = hash.split('sala=')[1].slice(0, 6).toUpperCase();
+        const code = sanitizeRoomCode(hash.split('sala=')[1]);
         if (code) {
           switchTab('lobby');
           document.getElementById('input-room-code').value = code;
@@ -2410,7 +2982,19 @@
         }
       }
 
-      // Populate Visual Gallery
+      // Link de convite colado numa aba onde o app já está aberto (só muda o hash, sem recarregar)
+      window.addEventListener('hashchange', () => {
+        const h = window.location.hash;
+        if (!h.includes('sala=')) return;
+        const code = sanitizeRoomCode(h.split('sala=')[1]);
+        if (code && code !== currentRoomCode) {
+          switchTab('lobby');
+          document.getElementById('input-room-code').value = code;
+          joinP2PRoom(code);
+        }
+      });
+
+      // Galeria visual
       const container = document.getElementById('gallery-base-cards');
       SEQUENCE.forEach((key, idx) => {
         const card = CARDS_DATA[key];

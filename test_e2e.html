@@ -8,265 +8,561 @@
   <h1>TACO CHAOS - Test Suite</h1>
   <div id="results">Running tests...</div>
 
-  <!-- Mock DOM slot for testing overlays -->
-  <div id="active-card-slot" style="display:none;"></div>
-
   <script>
+    // =========================================================================
+    // ATENÇÃO: este arquivo NÃO carrega o index.html. As funções abaixo são
+    // CÓPIAS da lógica de host/cliente do index.html (sem DOM). Ao mudar o
+    // protocolo ou o motor no index.html, espelhe a mudança aqui.
+    // =========================================================================
     const results = [];
     function assert(condition, testName) {
-      if (condition) {
-        results.push({ name: testName, pass: true });
-        console.log("PASS: " + testName);
-      } else {
-        results.push({ name: testName, pass: false });
-        console.error("FAIL: " + testName);
-      }
+      results.push({ name: testName, pass: !!condition });
+      console[condition ? 'log' : 'error']((condition ? 'PASS: ' : 'FAIL: ') + testName);
     }
 
-    // Mock Peer Connection for simulating P2P data channels in memory
+    // ----- Relógio falso: timers só disparam com clock.tick(ms) -----
+    const clock = {
+      now: 0, seq: 0, timers: [],
+      setTimeout(fn, ms) { const id = ++this.seq; this.timers.push({ id, at: this.now + ms, fn }); return id; },
+      clearTimeout(id) { this.timers = this.timers.filter(t => t.id !== id); },
+      tick(ms) {
+        const end = this.now + ms;
+        for (;;) {
+          const due = this.timers.filter(t => t.at <= end).sort((a, b) => a.at - b.at)[0];
+          if (!due) break;
+          this.timers = this.timers.filter(t => t !== due);
+          this.now = due.at;
+          due.fn();
+        }
+        this.now = end;
+      }
+    };
+
+    // ----- Conexões em memória (envio síncrono com clone JSON, como no fio) -----
     class MockConnection {
-      constructor(name) {
-        this.name = name;
-        this.open = true;
-        this.listeners = {};
-        this.peerConn = null;
-      }
-      on(event, cb) {
-        this.listeners[event] = cb;
-      }
+      constructor(name) { this.name = name; this.open = true; this.listeners = {}; this.peerConn = null; }
+      on(event, cb) { this.listeners[event] = cb; }
       send(data) {
+        if (!this.open) return;
         if (this.peerConn && this.peerConn.listeners['data']) {
           this.peerConn.listeners['data'](JSON.parse(JSON.stringify(data)));
         }
       }
       close() {
+        if (!this.open) return;
         this.open = false;
         if (this.listeners['close']) this.listeners['close']();
-        if (this.peerConn) {
+        if (this.peerConn && this.peerConn.open) {
           this.peerConn.open = false;
           if (this.peerConn.listeners['close']) this.peerConn.listeners['close']();
         }
       }
     }
-
     function createMockPair() {
-      const connA = new MockConnection("A");
-      const connB = new MockConnection("B");
-      connA.peerConn = connB;
-      connB.peerConn = connA;
-      return [connA, connB];
+      const a = new MockConnection('host-side'), b = new MockConnection('client-side');
+      a.peerConn = b; b.peerConn = a;
+      return [a, b];
     }
 
-    // Run tests
-    function runTestSuite() {
-      const SEQUENCE = ['TACO', 'GATO', 'CABRA', 'QUEIJO', 'PIZZA'];
+    // ----- Cópias de constantes / utilitários do index.html -----
+    const SEQUENCE = ['TACO', 'GATO', 'CABRA', 'QUEIJO', 'PIZZA'];
+    const SPECIALS = ['GORILA', 'NARVAL', 'MARMOTA'];
+    const AVATAR_OPTIONS = ['😎', '⚡', '🐱', '🌮', '🍕', '👾', '🦄', '🦍', '🧙', '👑', '🦊', '🤖', '🦫', '🔥', '💀', '🤡', '🧀', '🚀'];
+    const STICKERS = { '🌮': 'Taco!', '🔥': 'Fogo!' };
+    const RESOLVE_TIMEOUT_MS = 2800, ROUND_UNLOCK_MS = 1600, RESOLVE_DELAY_MS = 850;
+    const FALSE_START_MEME_INDEX = 5;
 
-      let hostState = {
-        isHost: true,
-        running: false,
-        mySlotIndex: 0,
-        slots: [
-          { id: 'host', userId: 'user_host', name: 'Host Player', cardsCount: 10, isBot: false, conn: null }
-        ],
-        turnSlot: 0,
-        wordIndex: -1,
-        pileCount: 0,
-        currentCard: null,
-        isTriggerActive: false,
-        slapOrder: []
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function sanitizeRoomCode(raw) { return String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); }
+    function sanitizeName(raw) {
+      const name = String(raw || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 14);
+      return name || 'Jogador';
+    }
+    function sanitizeAvatar(raw) { return AVATAR_OPTIONS.includes(raw) ? raw : '😎'; }
+
+    // Cópia de pickNextCard (spokenWord = palavra desta jogada)
+    function pickNextCard(spokenWord, rnd = Math.random) {
+      const roll = rnd();
+      if (roll < 0.28) return spokenWord;
+      if (roll < 0.44) return SPECIALS[Math.floor(rnd() * SPECIALS.length)];
+      const others = SEQUENCE.filter(w => w !== spokenWord);
+      return others[Math.floor(rnd() * others.length)];
+    }
+
+    // =========================================================================
+    // HOST (cópia do motor do index.html, sem DOM)
+    // =========================================================================
+    function createHost(hostUserId) {
+      const H = {
+        state: {
+          isHost: true, running: false, mySlotIndex: 0, gameId: 0,
+          slots: [{ id: 'host', userId: hostUserId, name: 'Host', avatar: '😎', isBot: false, isHost: true, cardsCount: 10, conn: null }],
+          turnSlot: 0, wordIndex: -1, pileCount: 0, currentCardId: null,
+          isTriggerActive: false, roundLocked: false, slapOrder: [], winnerSlot: null
+        },
+        pendingTimers: [], botTurnTimer: null,
+        nextCard: null,       // Teste pode forçar a próxima carta
+        rng: Math.random,
+        events: []
+      };
+      const S = H.state;
+
+      H.gameTimeout = (fn, ms) => {
+        const gid = S.gameId;
+        const t = clock.setTimeout(() => {
+          H.pendingTimers = H.pendingTimers.filter(x => x !== t);
+          if (gid !== S.gameId) return;
+          fn();
+        }, ms);
+        H.pendingTimers.push(t);
+        return t;
+      };
+      H.clearAllTimers = () => {
+        clock.clearTimeout(H.botTurnTimer);
+        H.pendingTimers.forEach(t => clock.clearTimeout(t));
+        H.pendingTimers = [];
+      };
+      H.sanitizedSlots = () => S.slots.map(s => ({ id: s.id, userId: s.userId, name: s.name, avatar: s.avatar, isBot: s.isBot, isHost: s.isHost, cardsCount: s.cardsCount }));
+      H.publicState = () => ({
+        running: S.running, turnSlot: S.turnSlot, wordIndex: S.wordIndex, pileCount: S.pileCount,
+        currentCardId: S.currentCardId, isTriggerActive: S.isTriggerActive, roundLocked: S.roundLocked,
+        winnerSlot: S.winnerSlot, slots: H.sanitizedSlots()
+      });
+      H.broadcast = (msg) => {
+        S.slots.forEach((s, idx) => { if (s.conn && s.conn.open) s.conn.send({ ...msg, yourSlotIndex: idx }); });
+      };
+      H.hasSlapped = (idx) => S.slapOrder.some(s => s.slotIndex === idx);
+
+      H.attach = (conn) => {
+        conn.on('data', (data) => H.onMessage(conn, data));
+        conn.on('close', () => H.onDisconnect(conn));
       };
 
-      let clientState = {
-        isHost: false,
-        running: false,
-        mySlotIndex: -1,
-        slots: [],
-        turnSlot: 0,
-        wordIndex: -1,
-        pileCount: 0,
-        currentCard: null,
-        isTriggerActive: false
-      };
-
-      // 0. Test Overlay states
-      function getTableOverlayHtml(state, isMultiplayer, roomCode) {
-        if (state.running) return '';
-        if (isMultiplayer && roomCode) {
-          if (state.isHost) {
-            return `SALA MULTIPLAYER ${roomCode} INICIAR PARTIDA`;
-          } else {
-            return `SALA MULTIPLAYER ${roomCode} Aguardando o Host`;
-          }
-        }
-        return `JOGAR SOLO (VS BOTS) SALA MULTIPLAYER (ATÉ 6)`;
-      }
-
-      const initialOverlay = getTableOverlayHtml(hostState, false, null);
-      assert(initialOverlay.includes("JOGAR SOLO (VS BOTS)"), "TEST 1: Welcome overlay offers Solo and Multiplayer before entering a room");
-
-      const roomOverlayHost = getTableOverlayHtml(hostState, true, "TACO9");
-      assert(roomOverlayHost.includes("SALA MULTIPLAYER TACO9") && !roomOverlayHost.includes("JOGAR SOLO (VS BOTS)"), "TEST 2: When room is created, overlay shows room code and INICIAR PARTIDA, NOT the initial Solo/Multiplayer selector");
-
-      assert(hostState.slots.length === 1, "TEST 3: Host creates room with exactly 1 player (Host only, no default bots)");
-
-      // 2. Client connects to Host
-      const [hostConn, clientConn] = createMockPair();
-
-      const hostConnections = [hostConn];
-      function broadcastToClients(msg) {
-        hostConnections.forEach(c => {
-          if (c && c.open) c.send(msg);
-        });
-      }
-
-      hostConn.on('data', (data) => {
+      H.onMessage = (conn, data) => {
+        if (!data || typeof data.type !== 'string') return;
+        const slotIndex = S.slots.findIndex(s => s.conn === conn);
         if (data.type === 'JOIN_OR_RECONNECT') {
-          const newSlotIdx = hostState.slots.length;
-          hostState.slots.push({
-            id: 'client_' + newSlotIdx,
-            userId: data.userId,
-            name: data.name,
-            cardsCount: 10,
-            isBot: false,
-            conn: hostConn
-          });
-          hostConn.send({
-            type: 'JOIN_ACCEPTED',
-            yourSlotIndex: newSlotIdx,
-            fullState: {
-              running: hostState.running,
-              turnSlot: hostState.turnSlot,
-              slots: hostState.slots.map(s => ({ name: s.name, cardsCount: s.cardsCount, isBot: s.isBot }))
-            }
-          });
-          broadcastToClients({
-            type: 'ROOM_UPDATE',
-            slots: hostState.slots.map(s => ({ name: s.name, cardsCount: s.cardsCount, isBot: s.isBot }))
-          });
-        } else if (data.type === 'PLAYER_PLAY_CARD') {
-          if (hostState.turnSlot === data.slotIndex) {
-            hostPlayCard(data.slotIndex);
-          }
+          if (slotIndex !== -1) H.profileUpdate(slotIndex, data); else H.join(conn, data);
+          return;
         }
-      });
-
-      clientConn.on('data', (data) => {
-        if (data.type === 'JOIN_ACCEPTED') {
-          clientState.mySlotIndex = data.yourSlotIndex;
-          clientState.slots = data.fullState.slots;
-        } else if (data.type === 'ROOM_UPDATE') {
-          clientState.slots = data.slots;
-        } else if (data.type === 'GAME_STARTED') {
-          clientState.running = true;
-          clientState.turnSlot = data.fullState.turnSlot;
-          clientState.slots = data.fullState.slots;
-        } else if (data.type === 'CARD_PLAYED') {
-          clientState.currentCard = data.card;
-          clientState.wordIndex = data.wordIndex;
-          clientState.turnSlot = data.nextTurnSlot;
-          clientState.pileCount = data.pileCount;
-          clientState.slots = data.slots;
+        if (slotIndex === -1) return;
+        if (data.type === 'PLAYER_PLAY_CARD') {
+          if (S.running && S.turnSlot === slotIndex && !S.roundLocked && !S.isTriggerActive) H.playCard(slotIndex);
+        } else if (data.type === 'PLAYER_SLAP') {
+          H.processSlap(slotIndex);
+        } else if (data.type === 'SEND_STICKER') {
+          if (STICKERS[data.emoji]) H.broadcast({ type: 'STICKER_BROADCAST', slotIndex, emoji: data.emoji });
         }
-      });
-
-      // Client joins
-      clientConn.send({
-        type: 'JOIN_OR_RECONNECT',
-        userId: 'user_client',
-        name: 'Player 2'
-      });
-
-      assert(clientState.mySlotIndex === 1, "TEST 4: Client joins and is assigned Slot 1 (Player 2)");
-      assert(hostState.slots.length === 2, "TEST 5: Room now has exactly 2 players (Host + Player 2)");
-
-      const roomOverlayClient = getTableOverlayHtml(clientState, true, "TACO9");
-      assert(roomOverlayClient.includes("Aguardando o Host") && !roomOverlayClient.includes("JOGAR SOLO (VS BOTS)"), "TEST 6: Client in room sees waiting for Host, NOT the initial Solo/Multiplayer selector");
-
-      // 3. Host starts game
-      hostState.running = true;
-      hostState.turnSlot = 0;
-      broadcastToClients({
-        type: 'GAME_STARTED',
-        fullState: {
-          running: true,
-          turnSlot: 0,
-          slots: hostState.slots.map(s => ({ name: s.name, cardsCount: s.cardsCount, isBot: s.isBot }))
-        }
-      });
-
-      assert(clientState.running === true, "TEST 7: Client receives GAME_STARTED and is running");
-      assert(hostState.turnSlot === 0, "TEST 8: Game begins on Turn 0 (Host turn)");
-
-      const overlayWhenRunning = getTableOverlayHtml(hostState, true, "TACO9");
-      assert(overlayWhenRunning === '', "TEST 9: When game starts, center table overlay is CLEARED completely");
-      
-      const hostIsTurnAtStart = (hostState.turnSlot === hostState.mySlotIndex);
-      const clientIsTurnAtStart = (clientState.turnSlot === clientState.mySlotIndex);
-      assert(hostIsTurnAtStart === true, "TEST 10: Host play button is ACTIVE on Turn 0");
-      assert(clientIsTurnAtStart === false, "TEST 11: Client play button is DISABLED on Turn 0 (waiting for Host)");
-
-      // 4. Host plays card
-      function hostPlayCard(slotIdx) {
-        hostState.slots[slotIdx].cardsCount--;
-        hostState.pileCount++;
-        hostState.wordIndex = (hostState.wordIndex + 1) % SEQUENCE.length;
-        const card = { id: 'GATO', label: 'GATO' };
-        const nextTurn = (hostState.turnSlot + 1) % hostState.slots.length;
-        hostState.turnSlot = nextTurn;
-        hostState.currentCard = card;
-
-        broadcastToClients({
-          type: 'CARD_PLAYED',
-          card: card,
-          wordIndex: hostState.wordIndex,
-          nextTurnSlot: nextTurn,
-          pileCount: hostState.pileCount,
-          slots: hostState.slots.map(s => ({ name: s.name, cardsCount: s.cardsCount, isBot: s.isBot }))
-        });
-      }
-
-      hostPlayCard(0);
-
-      assert(hostState.turnSlot === 1, "TEST 12: Host turn advanced to Turn 1 (Player 2)");
-      assert(clientState.turnSlot === 1, "TEST 13: Client receives CARD_PLAYED and clientState.turnSlot === 1");
-      
-      const hostIsTurnNow = (hostState.turnSlot === hostState.mySlotIndex);
-      const clientIsTurnNow = (clientState.turnSlot === clientState.mySlotIndex);
-      assert(hostIsTurnNow === false, "TEST 14: Host play button is now DISABLED (waiting for Player 2)");
-      assert(clientIsTurnNow === true, "TEST 15: Player 2 play button is now ACTIVE (JOGAR CARTA green button)");
-
-      // 5. Player 2 plays card
-      clientConn.send({
-        type: 'PLAYER_PLAY_CARD',
-        slotIndex: clientState.mySlotIndex
-      });
-
-      assert(hostState.turnSlot === 0, "TEST 16: Player 2 played card, turn returns to Turn 0 (Host)");
-      assert(clientState.turnSlot === 0, "TEST 17: Client receives CARD_PLAYED and turn is back to Host");
-      assert(clientState.pileCount === 2, "TEST 18: Central pile count incremented to 2 cards");
-      assert(clientState.slots[0].cardsCount === 9, "TEST 19: Host card count decremented from 10 to 9");
-      assert(clientState.slots[1].cardsCount === 9, "TEST 20: Player 2 card count decremented from 10 to 9");
-
-      // 6. Test Disconnect Failover (Bot Takeover)
-      clientConn.close();
-
-      const slot1 = hostState.slots[1];
-      if (!hostConn.open) {
-        slot1.isBot = true;
-      }
-      assert(slot1.isBot === true, "TEST 21: When Player 2 disconnects, Host marks slot as isBot: true");
-
-      // 7. Test Host starting room alone: auto-adds bot
-      let soloHostState = {
-        isHost: true,
-        running: false,
-        slots: [{ id: 'host', name: 'Alone Host' }]
       };
-      if (soloHostState.slots.length < 2) {
-        soloHostState.slots.push({ id: 'bot_auto', name: 'Bot Auto', isBot: true });
-      }
-      soloHostState.running = true;
-      assert(soloHostState.slots.length === 2 && soloHostState.running === true, "TEST 22: If Host is alone in room and clicks Iniciar, auto-adds a bot so the game starts smoothly without error");
+
+      H.profileUpdate = (slotIndex, data) => {
+        if (S.running) return;
+        const slot = S.slots[slotIndex];
+        slot.name = sanitizeName(data.name);
+        slot.avatar = sanitizeAvatar(data.avatar);
+        H.broadcast({ type: 'ROOM_UPDATE', slots: H.sanitizedSlots() });
+      };
+
+      H.join = (conn, data) => {
+        const name = sanitizeName(data.name), avatar = sanitizeAvatar(data.avatar);
+        const tab = String(data.tabSessionId || '').slice(0, 40);
+        let uid = String(data.userId || '').slice(0, 60) || ('anon_' + tab);
+        let effectiveName = name;
+        if (uid === S.slots[0].userId) { uid = 'local_' + tab; effectiveName = `${name} (Aba)`; }
+
+        const existing = S.slots.findIndex((s, i) => i > 0 && s.userId === uid);
+        if (existing !== -1) {
+          const slot = S.slots[existing];
+          const oldConn = slot.conn;
+          Object.assign(slot, { conn, isBot: false, name: effectiveName, avatar });
+          if (oldConn && oldConn !== conn) oldConn.close();
+          conn.send({ type: 'RECONNECT_SUCCESS', yourSlotIndex: existing, fullState: H.publicState() });
+          H.broadcast({ type: 'PLAYER_RECONNECTED', name: slot.name, slots: H.sanitizedSlots() });
+          return;
+        }
+        if (S.running) { conn.send({ type: 'GAME_IN_PROGRESS' }); return; }
+        if (S.slots.length >= 6) { conn.send({ type: 'ROOM_FULL' }); return; }
+
+        const idx = S.slots.length;
+        S.slots.push({ id: 'client_' + idx, userId: uid, name: effectiveName, avatar, isBot: false, isHost: false, cardsCount: 10, conn });
+        conn.send({ type: 'JOIN_ACCEPTED', yourSlotIndex: idx, fullState: H.publicState() });
+        H.broadcast({ type: 'ROOM_UPDATE', slots: H.sanitizedSlots() });
+      };
+
+      H.onDisconnect = (conn) => {
+        const idx = S.slots.findIndex(s => s.conn === conn);
+        if (idx === -1) return;
+        const slot = S.slots[idx];
+        slot.conn = null;
+        if (!S.running) {
+          S.slots.splice(idx, 1);
+          H.broadcast({ type: 'ROOM_UPDATE', slots: H.sanitizedSlots() });
+        } else {
+          slot.isBot = true;
+          H.broadcast({ type: 'PLAYER_DISCONNECTED', slotIndex: idx, name: slot.name, slots: H.sanitizedSlots() });
+          if (S.isTriggerActive && !S.roundLocked && !H.hasSlapped(idx)) H.scheduleBotSlap(idx);
+          else if (S.turnSlot === idx && !S.isTriggerActive && !S.roundLocked) H.scheduleBotTurn();
+        }
+      };
+
+      H.addBot = () => {
+        if (S.running || S.slots.length >= 6) return;
+        const id = 'bot_' + S.slots.length + '_' + Math.random().toString(36).slice(2, 5);
+        S.slots.push({ id, userId: id, name: 'Bot', avatar: '🤖', isBot: true, isHost: false, cardsCount: 10, conn: null });
+        H.broadcast({ type: 'ROOM_UPDATE', slots: H.sanitizedSlots() });
+      };
+      H.removeBot = (idx) => {
+        if (S.running || idx <= 0 || !S.slots[idx] || !String(S.slots[idx].id).startsWith('bot_')) return;
+        S.slots.splice(idx, 1);
+        H.broadcast({ type: 'ROOM_UPDATE', slots: H.sanitizedSlots() });
+      };
+
+      H.start = () => {
+        if (S.running) return;
+        if (S.slots.length < 2) H.addBot();
+        H.clearAllTimers();
+        S.gameId++;
+        S.winnerSlot = null;
+        S.slots.forEach(s => s.cardsCount = 10);
+        Object.assign(S, { turnSlot: 0, wordIndex: -1, pileCount: 0, currentCardId: null, isTriggerActive: false, roundLocked: false, slapOrder: [] });
+        S.running = true;
+        H.broadcast({ type: 'GAME_STARTED', fullState: H.publicState() });
+        if (S.slots[S.turnSlot].isBot) H.scheduleBotTurn();
+      };
+
+      H.playCard = (slotIndex) => {
+        if (!S.running || S.roundLocked || S.isTriggerActive || slotIndex !== S.turnSlot) return;
+        const slot = S.slots[slotIndex];
+        if (slot.cardsCount <= 0) { H.finishGame(slotIndex); return; }
+        clock.clearTimeout(H.botTurnTimer);
+        slot.cardsCount--;
+        S.pileCount++;
+        S.wordIndex = (S.wordIndex + 1) % SEQUENCE.length;
+        const spoken = SEQUENCE[S.wordIndex];
+        const cardId = H.nextCard ? H.nextCard(spoken) : pickNextCard(spoken, H.rng);
+        S.currentCardId = cardId;
+        S.turnSlot = (S.turnSlot + 1) % S.slots.length;
+        H.broadcast({ type: 'CARD_PLAYED', cardId, modifierId: 'NONE', wordIndex: S.wordIndex, turnSlot: S.turnSlot, pileCount: S.pileCount, slots: H.sanitizedSlots() });
+        const isMatch = cardId === spoken || SPECIALS.includes(cardId);
+        if (isMatch) H.activateTrigger(cardId); else H.advanceTurn();
+      };
+
+      H.advanceTurn = () => {
+        const current = S.slots[S.turnSlot];
+        if (current && current.cardsCount <= 0) { H.finishGame(S.turnSlot); return; }
+        if (current && current.isBot) H.scheduleBotTurn();
+      };
+
+      H.scheduleBotTurn = () => {
+        clock.clearTimeout(H.botTurnTimer);
+        const gid = S.gameId;
+        H.botTurnTimer = clock.setTimeout(() => {
+          if (gid !== S.gameId) return;
+          const slot = S.slots[S.turnSlot];
+          if (S.running && !S.roundLocked && !S.isTriggerActive && slot && slot.isBot) H.playCard(S.turnSlot);
+        }, 1000);
+      };
+
+      H.activateTrigger = (cardId) => {
+        S.isTriggerActive = true;
+        S.slapOrder = [];
+        H.broadcast({ type: 'TRIGGER_ACTIVATED', cardId });
+        S.slots.forEach((s, idx) => { if (s.isBot) H.scheduleBotSlap(idx); });
+        H.gameTimeout(H.resolveMissingSlaps, RESOLVE_TIMEOUT_MS);
+      };
+
+      H.scheduleBotSlap = (idx) => {
+        H.gameTimeout(() => {
+          const s = S.slots[idx];
+          if (s && s.isBot && S.isTriggerActive && !S.roundLocked) H.registerSlap(idx);
+        }, 1000);
+      };
+
+      H.resolveMissingSlaps = () => {
+        if (!S.isTriggerActive || S.roundLocked) return;
+        const missing = S.slots.map((s, i) => i).filter(i => !H.hasSlapped(i));
+        for (let i = missing.length - 1; i > 0; i--) {
+          const j = Math.floor(H.rng() * (i + 1));
+          [missing[i], missing[j]] = [missing[j], missing[i]];
+        }
+        missing.forEach(i => H.registerSlap(i, { missed: true }));
+      };
+
+      H.processSlap = (slotIndex) => {
+        if (!S.running || S.roundLocked) return;
+        if (S.isTriggerActive) H.registerSlap(slotIndex);
+        else if (S.pileCount > 0) H.falseSlap(slotIndex);
+      };
+
+      H.falseSlap = (slotIndex) => {
+        if (!S.running || S.roundLocked || S.isTriggerActive || S.pileCount <= 0) return;
+        S.roundLocked = true;
+        H.clearAllTimers();
+        H.resolvePile(slotIndex, FALSE_START_MEME_INDEX);
+      };
+
+      H.registerSlap = (slotIndex, opts = {}) => {
+        if (!S.isTriggerActive || S.roundLocked || !S.slots[slotIndex] || H.hasSlapped(slotIndex)) return;
+        const rank = S.slapOrder.length + 1;
+        S.slapOrder.push({ slotIndex, rank, missed: !!opts.missed });
+        H.broadcast({ type: 'SLAP_STAMP', slotIndex, rank, missed: !!opts.missed });
+        if (S.slapOrder.length >= S.slots.length) {
+          H.clearAllTimers();
+          S.roundLocked = true;
+          const loser = S.slapOrder[S.slapOrder.length - 1].slotIndex;
+          H.gameTimeout(() => H.resolvePile(loser, 0), RESOLVE_DELAY_MS);
+        }
+      };
+
+      H.resolvePile = (loserIdx, memeIndex) => {
+        const loser = S.slots[loserIdx];
+        loser.cardsCount += S.pileCount;
+        Object.assign(S, { pileCount: 0, isTriggerActive: false, wordIndex: -1, slapOrder: [], currentCardId: null, roundLocked: true, turnSlot: loserIdx });
+        H.events.push({ type: 'resolved', loserIdx, memeIndex });
+        H.broadcast({ type: 'ROUND_RESOLVED', loserSlot: loserIdx, memeIndex, fullState: H.publicState() });
+        H.gameTimeout(() => {
+          S.roundLocked = false;
+          const winnerIdx = S.slots.findIndex(s => s.cardsCount <= 0);
+          if (winnerIdx !== -1) { H.finishGame(winnerIdx); return; }
+          H.broadcast({ type: 'ROUND_UNLOCKED', fullState: H.publicState() });
+          if (S.slots[S.turnSlot].isBot) H.scheduleBotTurn();
+        }, ROUND_UNLOCK_MS);
+      };
+
+      H.finishGame = (winnerIdx) => {
+        H.clearAllTimers();
+        Object.assign(S, { running: false, isTriggerActive: false, roundLocked: false, winnerSlot: winnerIdx });
+        H.broadcast({ type: 'GAME_OVER', winnerSlot: winnerIdx, fullState: H.publicState() });
+      };
+
+      return H;
+    }
+
+    // =========================================================================
+    // CLIENTE (cópia de handleClientReceivedMessage / applySyncedState)
+    // =========================================================================
+    function createClient(conn, userId, tabSessionId) {
+      const C = {
+        conn, userId, tabSessionId, kickedReason: null, stickers: [],
+        state: { running: false, mySlotIndex: -1, slots: [], turnSlot: 0, wordIndex: -1, pileCount: 0, currentCardId: null, isTriggerActive: false, roundLocked: false, winnerSlot: null, mySlapped: false }
+      };
+      const S = C.state;
+      C.apply = (sync) => {
+        Object.assign(S, {
+          running: !!sync.running, turnSlot: sync.turnSlot, wordIndex: sync.wordIndex, pileCount: sync.pileCount,
+          currentCardId: sync.currentCardId, isTriggerActive: !!sync.isTriggerActive, roundLocked: !!sync.roundLocked,
+          winnerSlot: typeof sync.winnerSlot === 'number' ? sync.winnerSlot : null, slots: sync.slots || []
+        });
+      };
+      conn.on('data', (d) => {
+        if (typeof d.yourSlotIndex === 'number') S.mySlotIndex = d.yourSlotIndex;
+        switch (d.type) {
+          case 'JOIN_ACCEPTED': case 'RECONNECT_SUCCESS': case 'GAME_STARTED': case 'ROUND_RESOLVED': case 'ROUND_UNLOCKED':
+            C.apply(d.fullState); break;
+          case 'ROOM_UPDATE': S.slots = d.slots; break;
+          case 'CARD_PLAYED':
+            Object.assign(S, { currentCardId: d.cardId, wordIndex: d.wordIndex, turnSlot: d.turnSlot, pileCount: d.pileCount, slots: d.slots }); break;
+          case 'TRIGGER_ACTIVATED': S.isTriggerActive = true; S.mySlapped = false; break;
+          case 'GAME_OVER': C.apply(d.fullState); S.running = false; S.winnerSlot = d.winnerSlot; break;
+          case 'STICKER_BROADCAST': C.stickers.push(d); break;
+          case 'PLAYER_DISCONNECTED': case 'PLAYER_RECONNECTED': if (d.slots) S.slots = d.slots; break;
+          case 'GAME_IN_PROGRESS': case 'ROOM_FULL': case 'ROOM_CLOSED': C.kickedReason = d.type; break;
+        }
+      });
+      C.join = (name = 'Player') => conn.send({ type: 'JOIN_OR_RECONNECT', userId, tabSessionId, name, avatar: '🐱' });
+      C.canPlay = () => S.running && !S.roundLocked && !S.isTriggerActive && S.turnSlot === S.mySlotIndex;
+      C.play = () => { if (C.canPlay()) conn.send({ type: 'PLAYER_PLAY_CARD' }); };
+      // Cópia de handleLocalSlap: uma batida por gatilho; sem gatilho só se houver monte
+      C.slap = () => {
+        if (!S.running || S.roundLocked) return;
+        if (S.isTriggerActive) { if (S.mySlapped) return; S.mySlapped = true; }
+        else if (S.pileCount <= 0) return;
+        conn.send({ type: 'PLAYER_SLAP' });
+      };
+      return C;
+    }
+
+    function connectClient(host, userId, tab, name) {
+      const [hostSide, clientSide] = createMockPair();
+      host.attach(hostSide);
+      const client = createClient(clientSide, userId, tab);
+      client.join(name);
+      return client;
+    }
+
+    // Overlay da mesa (cópia simplificada de renderTableOverlay)
+    function getTableOverlayText(state, isHost, isMultiplayer, roomCode) {
+      if (state.running) return '';
+      if (state.winnerSlot !== null && state.winnerSlot !== undefined) return 'VENCEU';
+      if (isMultiplayer && roomCode) return isHost ? `SALA MULTIPLAYER ${roomCode} INICIAR PARTIDA` : `SALA MULTIPLAYER ${roomCode} Aguardando o Host`;
+      return 'JOGAR SOLO (VS BOTS) SALA MULTIPLAYER (ATÉ 6)';
+    }
+
+    // =========================================================================
+    // TESTES
+    // =========================================================================
+    function runTestSuite() {
+      // --- Fluxo básico (testes originais 1-22, adaptados ao protocolo atual) ---
+      let host = createHost('user_host');
+      assert(getTableOverlayText(host.state, true, false, null).includes('JOGAR SOLO (VS BOTS)'), 'TEST 1: Welcome overlay offers Solo and Multiplayer before entering a room');
+      const hostOverlay = getTableOverlayText(host.state, true, true, 'TACO9');
+      assert(hostOverlay.includes('SALA MULTIPLAYER TACO9') && !hostOverlay.includes('JOGAR SOLO'), 'TEST 2: Room overlay shows room code and INICIAR PARTIDA');
+      assert(host.state.slots.length === 1, 'TEST 3: Host creates room with exactly 1 player');
+
+      let client = connectClient(host, 'user_client', 'tab_c', 'Player 2');
+      assert(client.state.mySlotIndex === 1, 'TEST 4: Client joins and is assigned Slot 1');
+      assert(host.state.slots.length === 2, 'TEST 5: Room now has exactly 2 players');
+      assert(getTableOverlayText(client.state, false, true, 'TACO9').includes('Aguardando o Host'), 'TEST 6: Client in room sees waiting for Host');
+
+      host.nextCard = (spoken) => SEQUENCE.find(w => w !== spoken); // nunca combina
+      host.start();
+      assert(client.state.running === true, 'TEST 7: Client receives GAME_STARTED and is running');
+      assert(host.state.turnSlot === 0, 'TEST 8: Game begins on Turn 0 (Host)');
+      assert(getTableOverlayText(host.state, true, true, 'TACO9') === '', 'TEST 9: Overlay is cleared while game runs');
+      assert(!client.canPlay(), 'TEST 10: Client play button is DISABLED on Turn 0');
+
+      host.playCard(0);
+      assert(host.state.turnSlot === 1 && client.state.turnSlot === 1, 'TEST 11: Turn advances to Player 2 on host and client');
+      assert(client.canPlay(), 'TEST 12: Player 2 play button is ACTIVE');
+
+      client.play();
+      assert(host.state.turnSlot === 0 && client.state.turnSlot === 0, 'TEST 13: Player 2 played, turn back to Host');
+      assert(client.state.pileCount === 2, 'TEST 14: Pile count is 2');
+      assert(client.state.slots[0].cardsCount === 9 && client.state.slots[1].cardsCount === 9, 'TEST 15: Both players have 9 cards');
+
+      // --- B4: carta "certa" sai na taxa configurada (28%) ---
+      let match = 0; const N = 20000;
+      for (let i = 0; i < N; i++) { const w = SEQUENCE[i % 5]; if (pickNextCard(w) === w) match++; }
+      assert(Math.abs(match / N - 0.28) < 0.02, `TEST 16 (B4): Card matching the spoken word appears ~28% (got ${(match / N).toFixed(3)})`);
+
+      // --- B1: ninguém bate → rodada resolve sozinha ---
+      host.nextCard = (spoken) => spoken; // força gatilho
+      host.playCard(0);
+      assert(host.state.isTriggerActive && client.state.isTriggerActive, 'TEST 17: Trigger card activates trigger on host and client');
+      clock.tick(RESOLVE_TIMEOUT_MS + RESOLVE_DELAY_MS + 10);
+      assert(!host.state.isTriggerActive && host.events.length === 1, 'TEST 18 (B1): With 2 humans not slapping, round still resolves (no deadlock)');
+      const missedLoser = host.events[0].loserIdx;
+      assert(host.state.turnSlot === missedLoser && client.state.turnSlot === missedLoser, 'TEST 19 (B2): ROUND_RESOLVED already carries turnSlot = loser');
+      assert(client.state.roundLocked === true, 'TEST 20: Client is locked while pile is being collected');
+      clock.tick(ROUND_UNLOCK_MS + 10);
+      assert(client.state.roundLocked === false, 'TEST 21: ROUND_UNLOCKED releases the client');
+
+      // --- B2: cliente perde → recebe a vez e consegue jogar ---
+      if (host.state.turnSlot === 0) { host.nextCard = (s) => SEQUENCE.find(w => w !== s); host.playCard(0); }
+      host.nextCard = (spoken) => spoken;
+      client.play(); // carta do cliente é gatilho
+      host.processSlap(0); // host bate, cliente não
+      clock.tick(RESOLVE_TIMEOUT_MS + RESOLVE_DELAY_MS + 10);
+      assert(host.events[host.events.length - 1].loserIdx === 1, 'TEST 22: Client (did not slap) loses the round');
+      clock.tick(ROUND_UNLOCK_MS + 10);
+      assert(client.canPlay(), 'TEST 23 (B2): Loser client gets the turn and its play button is ACTIVE');
+      host.nextCard = (s) => SEQUENCE.find(w => w !== s);
+      const pileBefore = host.state.pileCount;
+      client.play();
+      assert(host.state.pileCount === pileBefore + 1, 'TEST 24 (B2): Host accepts the loser client\'s card');
+
+      // --- B5: cliente não age em nome de outro slot ---
+      const hostCards = host.state.slots[0].cardsCount;
+      client.conn.send({ type: 'PLAYER_PLAY_CARD', slotIndex: 0 }); // vez do host
+      assert(host.state.slots[0].cardsCount === hostCards && host.state.turnSlot === 0, 'TEST 25 (B5): Client cannot play a card on the Host\'s turn by spoofing slotIndex');
+      const eventsBefore = host.events.length;
+      client.conn.send({ type: 'PLAYER_SLAP', slotIndex: 0 }); // queimada: deve punir o PRÓPRIO cliente
+      assert(host.events[host.events.length - 1].loserIdx === 1 && host.events.length === eventsBefore + 1, 'TEST 26 (B5): Spoofed slap is attributed to the sender\'s own slot');
+      clock.tick(ROUND_UNLOCK_MS + 10);
+
+      // --- B6: sticker/nome maliciosos ---
+      client.conn.send({ type: 'SEND_STICKER', emoji: '<img src=x onerror=alert(1)>' });
+      assert(client.stickers.length === 0, 'TEST 27 (B6): Host drops stickers outside the allow-list');
+      assert(escapeHtml('<img src=x onerror="a()">') === '&lt;img src=x onerror=&quot;a()&quot;&gt;', 'TEST 28 (B6): escapeHtml neutralizes HTML');
+      assert(sanitizeAvatar('<svg onload=x>') === '😎' && sanitizeName('  ') === 'Jogador' && sanitizeName('x'.repeat(40)).length === 14, 'TEST 29 (B6): Avatar/name are sanitized');
+      assert(sanitizeRoomCode('ab<b>12') === 'ABB12', 'TEST 30 (B6): Room code from URL is sanitized');
+
+      // --- B7: batida com monte vazio não pune ---
+      host.state.pileCount = 0;
+      const evB7 = host.events.length;
+      client.conn.send({ type: 'PLAYER_SLAP' });
+      assert(host.events.length === evB7, 'TEST 31 (B7): Slap with empty pile is ignored (no penalty)');
+
+      // --- JOIN de uma conexão já associada não expulsa nem duplica ---
+      client.conn.send({ type: 'JOIN_OR_RECONNECT', userId: 'evil', name: 'x' });
+      assert(client.kickedReason === null && host.state.slots.length === 2, 'TEST 32: JOIN from an already-seated connection does not kick or add a slot');
+
+      // --- Entrada no meio da partida é recusada ---
+      const late = connectClient(host, 'user_late', 'tab_l', 'Late');
+      assert(late.kickedReason === 'GAME_IN_PROGRESS' && host.state.slots.length === 2, 'TEST 33: New player cannot join a running game');
+      host.addBot();
+      assert(host.state.slots.length === 2, 'TEST 34: Host cannot add bots while game is running');
+
+      // --- B3: fim de jogo chega ao cliente ---
+      host.state.slots[0].cardsCount = 0;
+      host.state.turnSlot = 1; client.state.turnSlot = 1;
+      host.state.pileCount = 1;
+      host.nextCard = (s) => SEQUENCE.find(w => w !== s);
+      client.play(); // passa a vez ao host, que está sem cartas
+      assert(host.state.running === false && host.state.winnerSlot === 0, 'TEST 35: Host with 0 cards wins when the turn reaches them');
+      assert(client.state.running === false && client.state.winnerSlot === 0, 'TEST 36 (B3): Client receives GAME_OVER with the winner');
+      assert(getTableOverlayText(client.state, false, true, 'TACO9') === 'VENCEU', 'TEST 37 (B3): Client shows the victory screen');
+
+      // --- C1: timers de partida antiga não vazam para a nova ---
+      host.nextCard = (spoken) => spoken;
+      host.start();
+      host.playCard(0); // gatilho
+      host.processSlap(0);
+      client.slap(); // todos bateram → resolução agendada
+      const gidOld = host.state.gameId;
+      const eventsOld = host.events.length;
+      host.state.running = false; // fim abrupto (ex: host reinicia)
+      // Simula um timer "esquecido" fora de clearAllTimers: o gameId deve neutralizá-lo
+      const stale = host.gameTimeout(() => host.resolvePile(1, 0), 10);
+      host.pendingTimers = host.pendingTimers.filter(t => t !== stale);
+      host.start();
+      clock.tick(5000);
+      assert(host.state.gameId === gidOld + 1 && host.events.length === eventsOld && host.state.pileCount === 0 && host.state.slots.every(s => s.cardsCount === 10),
+        'TEST 38 (C1): Pending timers from the previous match do not affect the new one');
+
+      // --- Falha de conexão: bot assume e reconexão reassume a vaga ---
+      host.nextCard = (s) => SEQUENCE.find(w => w !== s);
+      host.playCard(0); // vez do cliente
+      client.conn.close();
+      assert(host.state.slots[1].isBot === true, 'TEST 39: When Player 2 disconnects mid-game, Host marks slot as bot');
+      clock.tick(1100);
+      assert(host.state.turnSlot === 0, 'TEST 40: Bot plays the disconnected player\'s turn');
+      const client2 = connectClient(host, 'user_client', 'tab_c', 'Player 2');
+      assert(client2.state.mySlotIndex === 1 && host.state.slots[1].isBot === false && host.state.slots.length === 2, 'TEST 41: Reconnect by userId reclaims the same slot (no duplicate)');
+      assert(client2.state.running === true && client2.state.turnSlot === host.state.turnSlot, 'TEST 42: Reconnect snapshot syncs running state and turn');
+
+      // Conexão antiga "meio-morta" é substituída por reconexão
+      const client3 = connectClient(host, 'user_client', 'tab_c', 'Player 2');
+      assert(client3.state.mySlotIndex === 1 && client2.conn.open === false && host.state.slots.length === 2, 'TEST 43 (R1): Reconnect replaces a stale-but-open connection');
+
+      // --- C5: ninguém assume o slot do host ---
+      host.finishGame(0);
+      const sameBrowser = connectClient(host, 'user_host', 'tab_other', 'Host');
+      assert(sameBrowser.state.mySlotIndex === 2 && host.state.slots[0].conn === null && host.state.slots[2].userId === 'local_tab_other', 'TEST 44 (C5): Same-browser tab gets its own slot, never the Host slot');
+
+      // --- C4: remover bot re-localiza clientes ---
+      host.addBot();                    // slots: host, client3, aba, bot
+      const botIdx = host.state.slots.length - 1;
+      host.state.slots.splice(1, 0, host.state.slots.splice(botIdx, 1)[0]); // host, bot, client3, aba
+      host.broadcast({ type: 'ROOM_UPDATE', slots: host.sanitizedSlots() });
+      assert(client3.state.mySlotIndex === 2 && sameBrowser.state.mySlotIndex === 3, 'TEST 45a: Clients follow slot reordering via yourSlotIndex');
+      host.removeBot(1);
+      assert(client3.state.mySlotIndex === 1 && sameBrowser.state.mySlotIndex === 2, 'TEST 45 (C4): After removing a bot, clients learn their new slot index');
+      host.removeBot(1);
+      assert(host.state.slots.length === 3, 'TEST 46: Host cannot remove a human slot');
+
+      // --- C6: sair no lobby libera a vaga ---
+      sameBrowser.conn.close();
+      assert(host.state.slots.length === 2 && host.state.slots.every(s => !s.isBot || String(s.id).startsWith('bot_')), 'TEST 47 (C6): Leaving in the lobby frees the slot instead of creating a bot');
+
+      // --- Host sozinho inicia com bot automático ---
+      const alone = createHost('solo_host');
+      alone.start();
+      assert(alone.state.slots.length === 2 && alone.state.running === true && alone.state.slots[1].isBot, 'TEST 48: Host alone clicking Iniciar gets an auto bot');
 
       // Render results to DOM
       const passedCount = results.filter(r => r.pass).length;
@@ -276,13 +572,18 @@
       let html = `<h2 style="color: ${allPassed ? '#4ade80' : '#f87171'}">`;
       html += `Result: ${passedCount}/${totalCount} tests passed (${allPassed ? 'ALL PASSED' : 'FAILURES'})</h2><ul>`;
       results.forEach(r => {
-        html += `<li style="color: ${r.pass ? '#4ade80' : '#f87171'}">${r.pass ? '✓' : '✗'} ${r.name}</li>`;
+        html += `<li style="color: ${r.pass ? '#4ade80' : '#f87171'}">${r.pass ? '✓' : '✗'} ${escapeHtml(r.name)}</li>`;
       });
       html += `</ul><div id="final-status">${allPassed ? 'ALL_TESTS_PASSED' : 'TESTS_FAILED'}</div>`;
       document.getElementById('results').innerHTML = html;
     }
 
-    runTestSuite();
+    try {
+      runTestSuite();
+    } catch (e) {
+      console.error('FAIL: suite crashed', e);
+      document.getElementById('results').innerHTML = `<h2 style="color:#f87171">Suite crashed: ${escapeHtml(e.stack || e)}</h2><div id="final-status">TESTS_FAILED</div>`;
+    }
   </script>
 </body>
 </html>
