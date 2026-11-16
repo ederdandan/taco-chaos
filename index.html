@@ -213,7 +213,7 @@
     
     <!-- Top Status & App Bar -->
     <header class="bg-surface/95 backdrop-blur-md border-b border-slate-800/90 px-3.5 pt-2.5 pb-2 z-30 shrink-0">
-      <div class="flex items-center justify-between mb-2">
+      <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
           <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-coral to-violet flex items-center justify-center font-display font-bold text-base shadow-md border border-white/20">
             ⚡
@@ -228,6 +228,10 @@
 
         <!-- User Profile & Sound Controls -->
         <div class="flex items-center gap-1.5">
+          <!-- Volta para as Salas (só aparece na mesa) -->
+          <button id="btn-home" onclick="switchTab('lobby')" class="hidden px-2 py-1.5 rounded-xl bg-cardbg border border-slate-700/80 text-xs font-bold text-slate-200 hover:bg-slate-700 transition" title="Salas">
+            👥
+          </button>
           <button id="btn-user-profile" onclick="openProfileModal()" class="px-2 py-1 rounded-xl bg-cardbg border border-slate-700/80 text-xs font-bold text-slate-200 hover:bg-slate-700 transition flex items-center gap-1.5" title="Meu Perfil">
             <span id="user-header-avatar">😎</span>
             <span id="user-header-name" class="max-w-[70px] truncate text-[11px]">Você</span>
@@ -241,28 +245,13 @@
         </div>
       </div>
 
-      <!-- 4-Tab Navigation Switcher -->
-      <nav class="grid grid-cols-4 gap-1 bg-void p-1 rounded-2xl border border-slate-800">
-        <button onclick="switchTab('play')" id="tab-play" class="tab-btn py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all bg-coral text-white shadow truncate">
-          🎮 Mesa
-        </button>
-        <button onclick="switchTab('lobby')" id="tab-lobby" class="tab-btn py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all text-slate-400 hover:text-white truncate">
-          👥 Salas
-        </button>
-        <button onclick="switchTab('visual')" id="tab-visual" class="tab-btn py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all text-slate-400 hover:text-white truncate">
-          🎨 Cartas
-        </button>
-        <button onclick="switchTab('arch')" id="tab-arch" class="tab-btn py-1.5 px-1 rounded-xl text-[11px] font-bold transition-all text-slate-400 hover:text-white truncate">
-          ⚙️ Spec
-        </button>
-      </nav>
     </header>
 
     <!-- Floating Stickers & Meme Animations Container -->
     <div id="floating-effects-layer" class="absolute inset-0 pointer-events-none z-40 overflow-hidden"></div>
 
     <!-- Toast global (visível em qualquer aba) -->
-    <div id="arena-toast" class="absolute top-[112px] left-1/2 -translate-x-1/2 z-[60] pointer-events-none opacity-0 transition-opacity duration-200 bg-void/95 border-2 border-electric text-white px-3 py-1 rounded-full text-xs font-extrabold shadow-lg text-center w-max max-w-[92%]">
+    <div id="arena-toast" class="absolute top-[64px] left-1/2 -translate-x-1/2 z-[60] pointer-events-none opacity-0 transition-opacity duration-200 bg-void/95 border-2 border-electric text-white px-3 py-1 rounded-full text-xs font-extrabold shadow-lg text-center w-max max-w-[92%]">
       Mensagem de status
     </div>
 
@@ -341,8 +330,8 @@
 
         <!-- Quick Simulation Controls for Special Mobile Gestures -->
         <div id="sensor-sim-bar" class="hidden mt-1 flex items-center gap-1.5 z-20">
-          <button onclick="triggerGestureAction('shake')" class="px-2.5 py-1 rounded-xl bg-electric text-void font-extrabold text-[11px] neo-shadow-sm neo-active flex items-center gap-1">
-            <span>📳</span> Sacudir
+          <button onclick="triggerGestureAction('swipe_down')" class="px-2.5 py-1 rounded-xl bg-electric text-void font-extrabold text-[11px] neo-shadow-sm neo-active flex items-center gap-1">
+            <span>⬇️</span> Puxar Carta
           </button>
           <button onclick="triggerGestureAction('swipe')" class="px-2.5 py-1 rounded-xl bg-cyan text-white font-extrabold text-[11px] neo-shadow-sm neo-active flex items-center gap-1">
             <span>⬆️</span> Deslizar Chifre
@@ -392,7 +381,7 @@
           <button onclick="sendSticker('🍕', 'Pizza!')" class="p-1 rounded-xl hover:bg-cardbg transition neo-active">🍕</button>
           <button onclick="sendSticker('🦍', 'Uhh Uhh!')" class="p-1 rounded-xl hover:bg-cardbg transition neo-active">🦍</button>
           <button onclick="sendSticker('🦄', 'Chifre!')" class="p-1 rounded-xl hover:bg-cardbg transition neo-active">🦄</button>
-          <button onclick="sendSticker('🦫', 'Sacode!')" class="p-1 rounded-xl hover:bg-cardbg transition neo-active">🦫</button>
+          <button onclick="sendSticker('🦫', 'Puxa!')" class="p-1 rounded-xl hover:bg-cardbg transition neo-active">🦫</button>
           <button onclick="sendSticker('🔥', 'Fogo!')" class="p-1 rounded-xl hover:bg-cardbg transition neo-active">🔥</button>
           <button onclick="sendSticker('💀', 'RIP!')" class="p-1 rounded-xl hover:bg-cardbg transition neo-active">💀</button>
           <button onclick="sendSticker('🤡', 'Palhaço!')" class="p-1 rounded-xl hover:bg-cardbg transition neo-active">🤡</button>
@@ -510,134 +499,6 @@
     </section>
 
     <!-- ===================================================================== -->
-    <!-- VIEW 3: CONCEITO VISUAL & UX                                          -->
-    <!-- ===================================================================== -->
-    <section id="view-visual" class="hidden flex-1 overflow-y-auto no-scrollbar p-3.5 space-y-4">
-      
-      <div class="bg-gradient-to-br from-surface to-cardbg border border-slate-700/80 rounded-3xl p-3.5">
-        <span class="inline-block px-2.5 py-0.5 rounded-full bg-electric/20 text-electric text-[9px] font-extrabold uppercase tracking-wider mb-1.5">
-          Direção de Arte & Game Design
-        </span>
-        <h2 class="font-display font-bold text-base text-white leading-snug mb-1">
-          Neo-Brutalismo Arcade + Caos Sensorial
-        </h2>
-        <p class="text-[11px] text-slate-300 leading-relaxed">
-          Silhuetas de alto contraste com leitura em &lt;150ms e modificadores digitais para enganar o reflexo!
-        </p>
-      </div>
-
-      <!-- Interactive Card Deck Gallery -->
-      <div>
-        <div class="flex items-center justify-between mb-2">
-          <h3 class="font-display font-bold text-xs text-white uppercase tracking-wide">1. Baralho Base (5 Ícones)</h3>
-          <span class="text-[9px] text-slate-400">Toque para ouvir</span>
-        </div>
-        <div id="gallery-base-cards" class="grid grid-cols-3 gap-2">
-          <!-- Populated by JS -->
-        </div>
-      </div>
-
-      <!-- Special Chaos Cards -->
-      <div>
-        <h3 class="font-display font-bold text-xs text-coral uppercase tracking-wide mb-2">2. Cartas de Ação Mobile</h3>
-        <div class="space-y-2">
-          <div class="bg-surface border border-slate-800 rounded-2xl p-2.5 flex items-center gap-2.5">
-            <div class="w-10 h-10 rounded-xl bg-violet/20 border-2 border-violet flex items-center justify-center text-xl shrink-0">🦍</div>
-            <div>
-              <div class="flex items-center gap-1.5">
-                <span class="font-display font-bold text-xs text-white">GORILA</span>
-                <span class="text-[8px] font-bold bg-violet/30 text-purple-200 px-1 py-0.5 rounded">2x TAP</span>
-              </div>
-              <p class="text-[10px] text-slate-400">Exige 2 toques rápidos na tela antes de bater.</p>
-            </div>
-          </div>
-
-          <div class="bg-surface border border-slate-800 rounded-2xl p-2.5 flex items-center gap-2.5">
-            <div class="w-10 h-10 rounded-xl bg-cyan/20 border-2 border-cyan flex items-center justify-center text-xl shrink-0">🦄</div>
-            <div>
-              <div class="flex items-center gap-1.5">
-                <span class="font-display font-bold text-xs text-white">NARVAL</span>
-                <span class="text-[8px] font-bold bg-cyan/30 text-blue-200 px-1 py-0.5 rounded">SWIPE ↑</span>
-              </div>
-              <p class="text-[10px] text-slate-400">Deslize o dedo para cima formando o chifre.</p>
-            </div>
-          </div>
-
-          <div class="bg-surface border border-slate-800 rounded-2xl p-2.5 flex items-center gap-2.5">
-            <div class="w-10 h-10 rounded-xl bg-electric/20 border-2 border-electric flex items-center justify-center text-xl shrink-0">🦫</div>
-            <div>
-              <div class="flex items-center gap-1.5">
-                <span class="font-display font-bold text-xs text-white">MARMOTA</span>
-                <span class="text-[8px] font-bold bg-electric/30 text-yellow-200 px-1 py-0.5 rounded">SHAKE 📳</span>
-              </div>
-              <p class="text-[10px] text-slate-400">Sacuda o aparelho fisicamente ou aperte Simular.</p>
-            </div>
-          </div>
-
-          <div class="bg-surface border border-coral/60 rounded-2xl p-2.5 flex items-center gap-2.5">
-            <div class="w-10 h-10 rounded-xl bg-coral/20 border-2 border-coral flex items-center justify-center text-xl shrink-0">🦥</div>
-            <div>
-              <div class="flex items-center gap-1.5">
-                <span class="font-display font-bold text-xs text-white">PREGUIÇA</span>
-                <span class="text-[8px] font-bold bg-coral/30 text-red-200 px-1 py-0.5 rounded">ARMADILHA 🚫</span>
-              </div>
-              <p class="text-[10px] text-slate-400">NÃO bata! Quem cair na armadilha leva o monte.</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-    </section>
-
-    <!-- ===================================================================== -->
-    <!-- VIEW 4: ESPECIFICAÇÃO & ARQUITETURA                                   -->
-    <!-- ===================================================================== -->
-    <section id="view-arch" class="hidden flex-1 overflow-y-auto no-scrollbar p-3.5 space-y-3">
-      
-      <div class="bg-surface border border-slate-800 rounded-3xl p-3.5">
-        <div class="flex items-center gap-2 mb-1.5">
-          <span class="px-2 py-0.5 rounded-md bg-mint/20 text-mint text-[9px] font-extrabold">100% GITHUB PAGES</span>
-          <span class="text-[9px] text-slate-400 font-mono">WebRTC + LocalStorage</span>
-        </div>
-        <h2 class="font-display font-bold text-sm text-white mb-1">Arquitetura Serverless P2P</h2>
-        <p class="text-[11px] text-slate-400 leading-relaxed mb-2.5">
-          Sem servidores próprios. O Host gerencia a sala via <strong>PeerJS</strong>. Se um jogador cair, um <strong>robô assume automaticamente</strong> e devolve o controle assim que o jogador reconectar.
-        </p>
-      </div>
-
-      <div class="bg-surface border border-slate-800 rounded-3xl p-3.5">
-        <h3 class="font-display font-bold text-xs text-electric mb-2">📋 Recursos Implementados</h3>
-        <ul class="space-y-1.5 text-[11px] text-slate-300">
-          <li class="flex items-center gap-2">
-            <span class="text-mint font-bold">✓</span>
-            <span><strong>Conta Local:</strong> Perfil salvo no <code class="text-cyan">localStorage</code> sem autenticação externa.</span>
-          </li>
-          <li class="flex items-center gap-2">
-            <span class="text-mint font-bold">✓</span>
-            <span><strong>Salas P2P de até 6 pessoas:</strong> Lobbies dinâmicos via WebRTC.</span>
-          </li>
-          <li class="flex items-center gap-2">
-            <span class="text-mint font-bold">✓</span>
-            <span><strong>Failover com Robô:</strong> Queda de conexão ativa bot no Host sem travar o jogo.</span>
-          </li>
-          <li class="flex items-center gap-2">
-            <span class="text-mint font-bold">✓</span>
-            <span><strong>Reconexão Transparente:</strong> Reassume a vaga e recebe snapshot do estado.</span>
-          </li>
-          <li class="flex items-center gap-2">
-            <span class="text-mint font-bold">✓</span>
-            <span><strong>Stickers em Tempo Real:</strong> Reações animadas flutuantes entre os jogadores.</span>
-          </li>
-          <li class="flex items-center gap-2">
-            <span class="text-mint font-bold">✓</span>
-            <span><strong>Memes de Derrota:</strong> Carimbos e sons cômicos aleatórios para quem perder o monte.</span>
-          </li>
-        </ul>
-      </div>
-
-    </section>
-
-    <!-- ===================================================================== -->
     <!-- MODALS & OVERLAYS                                                     -->
     <!-- ===================================================================== -->
 
@@ -645,10 +506,10 @@
     <div id="profile-modal" class="hidden absolute inset-0 bg-void/95 backdrop-blur-md z-50 p-5 flex flex-col justify-between gap-3">
       <div class="min-h-0 overflow-y-auto no-scrollbar">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="font-display font-bold text-lg text-white">Minha Conta Local</h2>
-          <button onclick="closeProfileModal()" class="w-8 h-8 rounded-full bg-surface border border-slate-700 text-slate-300 font-bold">✕</button>
+          <h2 id="profile-modal-title" class="font-display font-bold text-lg text-white">Minha Conta Local</h2>
+          <button id="profile-modal-close" onclick="closeProfileModal()" class="w-8 h-8 rounded-full bg-surface border border-slate-700 text-slate-300 font-bold">✕</button>
         </div>
-        <p class="text-xs text-slate-400 mb-4">
+        <p id="profile-modal-desc" class="text-xs text-slate-400 mb-4">
           Seu perfil fica salvo no navegador deste aparelho. Sem senhas ou cadastros externos.
         </p>
 
@@ -705,7 +566,7 @@
         </div>
       </div>
 
-      <button onclick="saveUserProfile()" class="w-full py-3 rounded-2xl bg-coral text-white font-display font-bold text-sm neo-shadow-sm neo-active">
+      <button id="profile-save-btn" onclick="saveUserProfile()" class="w-full py-3 rounded-2xl bg-coral text-white font-display font-bold text-sm neo-shadow-sm neo-active">
         SALVAR PERFIL
       </button>
     </div>
@@ -733,7 +594,7 @@
           </div>
           <div class="bg-surface p-2.5 rounded-2xl border border-slate-800">
             <strong class="text-cyan block mb-0.5">4. Gestos e Teclado</strong>
-            🦍 toque 2x · 🦄 deslize ↑ · 🦫 sacuda o celular. No PC: <strong>↑</strong> joga carta / chifre, <strong>Espaço</strong> bate, <strong>S</strong> sacode.
+            🦍 toque 2x · 🦄 deslize ↑ · 🦫 puxe a carta ↓. No PC: <strong>↑</strong> joga carta / chifre, <strong>↓</strong> puxa, <strong>Espaço</strong> bate.
           </div>
           <div class="bg-surface p-2.5 rounded-2xl border border-slate-800">
             <strong class="text-electric block mb-0.5">5. Voz e Modo Difícil</strong>
@@ -871,9 +732,37 @@
     // Avatar escolhido no modal, só aplicado ao salvar
     let pendingAvatar = null;
 
+    // Login: na primeira vez o jogador escolhe nome/avatar antes de ver as Salas.
+    // Perfil continua só no localStorage; "logado" = loggedIn salvo no perfil.
+    let afterLoginCallback = null;
+    let loginMode = false;
+
+    function requireLogin(onReady) {
+      if (localUser.loggedIn) {
+        if (onReady) onReady();
+        return;
+      }
+      afterLoginCallback = onReady || null;
+      loginMode = true;
+      openProfileModal();
+    }
+
+    function applyProfileModalMode() {
+      document.getElementById('profile-modal-title').textContent = loginMode ? 'Bem-vindo! 👋' : 'Minha Conta Local';
+      document.getElementById('profile-modal-desc').textContent = loginMode
+        ? 'Escolha seu nome e avatar para entrar. Fica salvo neste aparelho, sem senha.'
+        : 'Seu perfil fica salvo no navegador deste aparelho. Sem senhas ou cadastros externos.';
+      document.getElementById('profile-modal-close').classList.toggle('hidden', loginMode);
+      document.getElementById('profile-save-btn').textContent = loginMode ? 'ENTRAR NO JOGO' : 'SALVAR PERFIL';
+    }
+
     function openProfileModal() {
+      applyProfileModalMode();
       pendingAvatar = localUser.avatar;
-      document.getElementById('profile-name-input').value = localUser.name;
+      const nameField = document.getElementById('profile-name-input');
+      // No login o nome sorteado vira sugestão (vazio = mantém a sugestão)
+      nameField.value = loginMode ? '' : localUser.name;
+      nameField.placeholder = localUser.name;
       document.getElementById('stat-matches').textContent = localUser.stats.matches || 0;
       document.getElementById('stat-wins').textContent = localUser.stats.wins || 0;
       document.getElementById('stat-slaps').textContent = localUser.stats.slaps || 0;
@@ -907,11 +796,20 @@
       const nameInput = document.getElementById('profile-name-input').value.trim();
       if (nameInput) localUser.name = nameInput.slice(0, 14);
       if (pendingAvatar) localUser.avatar = pendingAvatar;
+      const wasLogin = loginMode;
+      localUser.loggedIn = true;
+      loginMode = false;
       saveUserToStorage();
       updateHeaderUserUI();
       closeProfileModal();
       syncProfileToRoom();
-      showToast('Perfil atualizado!', 'border-mint');
+      showToast(wasLogin ? `Bem-vindo, ${localUser.name}!` : 'Perfil atualizado!', 'border-mint');
+      if (wasLogin) {
+        initAudio(); // Aproveita o toque do usuário para liberar o áudio
+        const cb = afterLoginCallback;
+        afterLoginCallback = null;
+        if (cb) cb();
+      }
     }
 
     // No lobby (antes da partida), propaga nome/avatar novos para a sala
@@ -1183,9 +1081,9 @@
         id: 'MARMOTA',
         label: 'MARMOTA!',
         special: true,
-        gestureType: 'shake',
-        gestureBadge: 'SACUDIR CELULAR 📳',
-        gestureSub: 'Sacuda ou toque em Simular!',
+        gestureType: 'swipe_down',
+        gestureBadge: 'PUXE A CARTA ↓',
+        gestureSub: 'Deslize ↓ na carta ou use botão!',
         icon: '🦫',
         bg: 'from-[#27272A] via-[#92400E] to-[#F59E0B]',
         border: '#FF4D6D',
@@ -1545,7 +1443,6 @@
 
     function createP2PRoom(attempt = 0) {
       initAudio();
-      enableMotionSensors();
       teardownSession();
 
       const code = generateRoomCode();
@@ -1661,7 +1558,6 @@
 
     function joinP2PRoom(codeToJoin, opts = {}) {
       initAudio();
-      enableMotionSensors();
       const code = sanitizeRoomCode(codeToJoin || document.getElementById('input-room-code').value);
       if (!code) {
         showToast('Digite o código da sala!', 'border-coral');
@@ -2285,7 +2181,6 @@
     // =========================================================================
     function startSoloGame() {
       initAudio();
-      enableMotionSensors();
       teardownSession(); // Sai de qualquer sala/partida anterior
 
       gameState.isMultiplayer = false;
@@ -2568,7 +2463,7 @@
         document.getElementById('gesture-progress').textContent = card.gestureType === 'double_tap' ? '0/2' : '0/1';
         prompt.classList.remove('hidden');
 
-        if (card.gestureType === 'shake' || card.gestureType === 'swipe') {
+        if (card.gestureType === 'swipe_down' || card.gestureType === 'swipe') {
           document.getElementById('sensor-sim-bar').classList.remove('hidden');
         }
       } else {
@@ -2576,7 +2471,7 @@
       }
     }
 
-    // ----- Entrada: toque, swipe, sacudida e teclado -----
+    // ----- Entrada: toque, swipes e teclado -----
     const centerZone = document.getElementById('center-pile-zone');
     let suppressClickUntil = 0;
     let swipeStart = null;
@@ -2609,7 +2504,7 @@
       onArenaTap();
     });
 
-    // Swipe para cima (Narval) com dedo ou mouse
+    // Swipe para cima (Narval) ou para baixo (Marmota) com dedo ou mouse
     centerZone.addEventListener('pointerdown', (e) => {
       swipeStart = { x: e.clientX, y: e.clientY, t: Date.now() };
     });
@@ -2619,49 +2514,14 @@
       const dy = e.clientY - swipeStart.y;
       const dt = Date.now() - swipeStart.t;
       swipeStart = null;
-      if (dy < -40 && Math.abs(dy) > Math.abs(dx) && dt < 800) {
+      if (Math.abs(dy) > 40 && Math.abs(dy) > Math.abs(dx) && dt < 800) {
         suppressClickUntil = Date.now() + 400;
-        triggerGestureAction('swipe');
+        triggerGestureAction(dy < 0 ? 'swipe' : 'swipe_down');
       }
     });
     centerZone.addEventListener('pointercancel', () => { swipeStart = null; });
 
-    // Sacudida (Marmota) pelo acelerômetro
-    let motionEnabled = false;
-    let lastShakeAt = 0;
-
-    function handleDeviceMotion(e) {
-      const a = e.acceleration;
-      let magnitude = 0;
-      if (a && a.x !== null) {
-        magnitude = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
-      } else if (e.accelerationIncludingGravity) {
-        const g = e.accelerationIncludingGravity;
-        magnitude = Math.max(0, Math.sqrt(g.x * g.x + g.y * g.y + g.z * g.z) - 9.8);
-      }
-      if (magnitude > 15 && Date.now() - lastShakeAt > 600) {
-        lastShakeAt = Date.now();
-        triggerGestureAction('shake');
-      }
-    }
-
-    // Precisa ser chamado num gesto do usuário (iOS pede permissão)
-    function enableMotionSensors() {
-      if (motionEnabled || typeof window.DeviceMotionEvent === 'undefined') return;
-      motionEnabled = true;
-      const attach = () => window.addEventListener('devicemotion', handleDeviceMotion);
-      try {
-        if (typeof DeviceMotionEvent.requestPermission === 'function') {
-          DeviceMotionEvent.requestPermission()
-            .then(state => { if (state === 'granted') attach(); })
-            .catch(() => {});
-        } else {
-          attach();
-        }
-      } catch (e) {}
-    }
-
-    // Teclado: Espaço bate, ↑ joga carta (ou faz o swipe), S sacode
+    // Teclado: Espaço bate, ↑ joga carta (ou faz o chifre), ↓ puxa a carta (Marmota)
     document.addEventListener('keydown', (e) => {
       const tag = (e.target && e.target.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || e.repeat) return;
@@ -2677,8 +2537,9 @@
         e.preventDefault();
         if (pendingGesture === 'swipe') triggerGestureAction('swipe');
         else playerPlayCard();
-      } else if (e.key === 's' || e.key === 'S') {
-        triggerGestureAction('shake');
+      } else if (e.code === 'ArrowDown') {
+        e.preventDefault();
+        triggerGestureAction('swipe_down');
       }
     });
 
@@ -3139,7 +3000,7 @@
     function showToast(msg, borderColor = 'border-electric') {
       const toast = document.getElementById('arena-toast');
       toast.textContent = msg;
-      toast.className = `absolute top-[112px] left-1/2 -translate-x-1/2 z-[60] pointer-events-none transition-opacity duration-200 bg-void/95 border-2 ${borderColor} text-white px-3 py-1 rounded-full text-xs font-extrabold shadow-lg text-center w-max max-w-[92%] opacity-100`;
+      toast.className = `absolute top-[64px] left-1/2 -translate-x-1/2 z-[60] pointer-events-none transition-opacity duration-200 bg-void/95 border-2 ${borderColor} text-white px-3 py-1 rounded-full text-xs font-extrabold shadow-lg text-center w-max max-w-[92%] opacity-100`;
       clearTimeout(toast._t);
       toast._t = setTimeout(() => {
         toast.classList.remove('opacity-100');
@@ -3154,19 +3015,11 @@
       if (tabName === 'lobby') {
         renderRejoinOption();
       }
-      ['play', 'lobby', 'visual', 'arch'].forEach(t => {
-        const view = document.getElementById(`view-${t}`);
-        const btn = document.getElementById(`tab-${t}`);
-        if (t === tabName) {
-          view.classList.remove('hidden');
-          btn.classList.add('bg-coral', 'text-white', 'shadow');
-          btn.classList.remove('text-slate-400');
-        } else {
-          view.classList.add('hidden');
-          btn.classList.remove('bg-coral', 'text-white', 'shadow');
-          btn.classList.add('text-slate-400');
-        }
+      ['play', 'lobby'].forEach(t => {
+        document.getElementById(`view-${t}`).classList.toggle('hidden', t !== tabName);
       });
+      // Na mesa, o botão 👥 do topo leva de volta para as Salas
+      document.getElementById('btn-home').classList.toggle('hidden', tabName !== 'play');
     }
 
     function openRulesModal() {
@@ -3183,18 +3036,18 @@
     window.addEventListener('DOMContentLoaded', () => {
       initUserAccount();
       renderTableOverlay();
-      renderRejoinOption();
+      // Tela inicial: Salas (criar/entrar numa sala ou jogar solo)
+      switchTab('lobby');
 
       // Link de convite direto (ex: #sala=TACO5) — também usado ao recarregar a página na sala
       const hash = window.location.hash;
-      if (hash.includes('sala=')) {
-        const code = sanitizeRoomCode(hash.split('sala=')[1]);
-        if (code) {
-          switchTab('lobby');
-          document.getElementById('input-room-code').value = code;
-          setTimeout(() => joinP2PRoom(code), 350);
-        }
-      }
+      const inviteCode = hash.includes('sala=') ? sanitizeRoomCode(hash.split('sala=')[1]) : '';
+      if (inviteCode) document.getElementById('input-room-code').value = inviteCode;
+
+      // Sem login: pede nome/avatar primeiro e só depois entra na sala do convite
+      requireLogin(() => {
+        if (inviteCode) setTimeout(() => joinP2PRoom(inviteCode), 350);
+      });
 
       // Link de convite colado numa aba onde o app já está aberto (só muda o hash, sem recarregar)
       window.addEventListener('hashchange', () => {
@@ -3204,26 +3057,8 @@
         if (code && code !== currentRoomCode) {
           switchTab('lobby');
           document.getElementById('input-room-code').value = code;
-          joinP2PRoom(code);
+          requireLogin(() => joinP2PRoom(code));
         }
-      });
-
-      // Galeria visual
-      const container = document.getElementById('gallery-base-cards');
-      SEQUENCE.forEach((key, idx) => {
-        const card = CARDS_DATA[key];
-        const el = document.createElement('button');
-        el.onclick = () => {
-          sfxCardFlip(idx);
-          vibrate(25);
-        };
-        el.className = `rounded-2xl bg-gradient-to-br ${card.bg} border-2 p-2 flex flex-col items-center justify-between neo-shadow-sm neo-active transition`;
-        el.style.borderColor = card.border;
-        el.innerHTML = `
-          <div class="transform scale-70 -my-2">${card.svg}</div>
-          <span class="font-display font-bold text-[11px] tracking-wide ${card.textCol} mt-1">${card.label}</span>
-        `;
-        container.appendChild(el);
       });
     });
   </script>

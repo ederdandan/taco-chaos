@@ -13,7 +13,7 @@ TACO! GATO! CHAOS! — a P2P party reflex game (2–6 players) shipped as a stat
 - Invite links use `#sala=<CODE>`. On load, the page auto-switches to the lobby and joins.
 - Tests: open `test_e2e.html` in a browser. Results render on the page and in the console (`PASS:`/`FAIL:`). There is no CLI runner.
 - **Important:** `test_e2e.html` does not load `index.html`. It holds its own copies of the host/client message handlers, `getTableOverlayHtml` and a `MockConnection` pair that links two in-memory peers. Changes to game or protocol logic in `index.html` must be mirrored by hand in the test file, or the tests will pass against stale logic.
-- After changing cached assets, bump `CACHE_NAME` in `sw.js` (currently `taco-chaos-v3`). Navigations are network-first, but other assets are cache-first and keep old versions until the bump.
+- After changing cached assets, bump `CACHE_NAME` in `sw.js` (currently `taco-chaos-v4`). Navigations are network-first, but other assets are cache-first and keep old versions until the bump.
 
 ## Architecture
 

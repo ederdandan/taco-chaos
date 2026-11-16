@@ -9,7 +9,7 @@
 
 ## 1. Visão Geral e Objetivos
 
-O **TACO! GATO! CHAOS!** é uma adaptação digital party reflex baseada no jogo *Taco Gato Cabra Queijo Pizza*, enriquecida com modificadores de caos sensorial, gestos mobile (swipe, toque duplo e shake) e interação social em tempo real.
+O **TACO! GATO! CHAOS!** é uma adaptação digital party reflex baseada no jogo *Taco Gato Cabra Queijo Pizza*, enriquecida com modificadores de caos sensorial, gestos mobile (swipe para cima, swipe para baixo e toque duplo) e interação social em tempo real.
 
 O projeto opera **100% no navegador**, sem servidor backend próprio, hospedado de forma gratuita no **GitHub Pages**, utilizando recursos modernos de navegador (Cache API, WebRTC, Web Audio API e LocalStorage).
 
