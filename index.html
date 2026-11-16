@@ -222,7 +222,7 @@
             <h1 class="font-display font-bold text-sm sm:text-base leading-none tracking-tight text-white flex items-center gap-1">
               TACO<span class="text-electric">!</span> CHAOS<span class="text-coral">!</span>
             </h1>
-            <p id="room-status-badge" class="text-[9px] text-slate-400 font-medium tracking-wide">P2P PARTY GAME</p>
+            <p id="room-status-badge" class="hidden text-[9px] text-slate-400 font-medium tracking-wide"></p>
           </div>
         </div>
 
@@ -1290,7 +1290,9 @@
       document.getElementById('active-room-code').textContent = currentRoomCode;
       document.getElementById('lobby-join-controls').classList.add('hidden');
       document.getElementById('lobby-room-details').classList.remove('hidden');
-      document.getElementById('room-status-badge').textContent = `SALA: ${currentRoomCode}${gameState.isHost ? ' (HOST)' : ''}`;
+      const badge = document.getElementById('room-status-badge');
+      badge.textContent = `SALA: ${currentRoomCode}${gameState.isHost ? ' (HOST)' : ''}`;
+      badge.classList.remove('hidden');
       setP2PStatus('bg-mint', gameState.isHost ? 'Sala Criada' : 'Conectado!');
     }
 
@@ -1299,7 +1301,9 @@
       document.getElementById('lobby-room-details').classList.add('hidden');
       document.getElementById('btn-start-p2p-game').classList.remove('hidden');
       document.getElementById('host-hint-text').textContent = 'Toque em slot vazio p/ adicionar bot';
-      document.getElementById('room-status-badge').textContent = 'P2P PARTY GAME';
+      const badge = document.getElementById('room-status-badge');
+      badge.textContent = '';
+      badge.classList.add('hidden'); // Fora de sala, nada abaixo do logo
       setP2PStatus('bg-yellow-400', 'Pronto');
       closeQrModal();
       renderRejoinOption();
