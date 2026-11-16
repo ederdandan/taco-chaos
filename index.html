@@ -720,6 +720,18 @@
     // =========================================================================
     const AVATAR_OPTIONS = ['😎', '⚡', '🐱', '🌮', '🍕', '👾', '🦄', '🦍', '🧙', '👑', '🦊', '🤖', '🦫', '🔥', '💀', '🤡', '🧀', '🚀'];
     
+    // Tab session ID to isolate tabs on the same computer during local testing
+    let tabSessionId = '';
+    try {
+      tabSessionId = sessionStorage.getItem('taco_tab_session_id');
+      if (!tabSessionId) {
+        tabSessionId = 'tab_' + Math.random().toString(36).substr(2, 9);
+        sessionStorage.setItem('taco_tab_session_id', tabSessionId);
+      }
+    } catch (e) {
+      tabSessionId = 'tab_' + Date.now();
+    }
+
     let localUser = {
       userId: '',
       name: 'Jogador',
@@ -1082,11 +1094,9 @@
         gameState.mySlotIndex = 0;
         hostConnections = [];
 
-        // Initialize 6 slots with Host in Slot 0 and 2 default Bots in Slots 1 & 2
+        // In multiplayer, initialize with ONLY the Host! Slots 1-5 will be filled by other players or bots
         gameState.slots = [
-          { id: 'host', userId: localUser.userId, name: localUser.name, avatar: localUser.avatar, isBot: false, isHost: true, cardsCount: 10, conn: null },
-          { id: 'bot_1', userId: 'bot_1', name: BOT_PRESETS[0].name, avatar: BOT_PRESETS[0].avatar, isBot: true, isHost: false, cardsCount: 10, conn: null },
-          { id: 'bot_2', userId: 'bot_2', name: BOT_PRESETS[1].name, avatar: BOT_PRESETS[1].avatar, isBot: true, isHost: false, cardsCount: 10, conn: null }
+          { id: 'host', userId: localUser.userId, tabSessionId: tabSessionId, name: localUser.name, avatar: localUser.avatar, isBot: false, isHost: true, cardsCount: 10, conn: null }
         ];
 
         document.getElementById('active-room-code').textContent = currentRoomCode;
@@ -1111,17 +1121,30 @@
       });
     }
 
-    function handleHostIncomingConnection(conn) {
-      conn.on('open', () => {
+    function addHostConnection(conn) {
+      if (!conn) return;
+      if (!hostConnections.includes(conn)) {
         hostConnections.push(conn);
-      });
+      }
+    }
+
+    function handleHostIncomingConnection(conn) {
+      addHostConnection(conn);
+      if (conn.open) {
+        addHostConnection(conn);
+      } else {
+        conn.on('open', () => addHostConnection(conn));
+      }
 
       conn.on('data', (data) => {
+        addHostConnection(conn);
         handleHostReceivedMessage(conn, data);
       });
 
       // BOT FAILOVER ON DISCONNECT!
       conn.on('close', () => {
+        const idx = hostConnections.indexOf(conn);
+        if (idx !== -1) hostConnections.splice(idx, 1);
         handleClientDisconnection(conn);
       });
     }
@@ -1175,7 +1198,7 @@
       peer.on('open', (id) => {
         clientConnection = peer.connect(targetPeerId, { reliable: true });
 
-        clientConnection.on('open', () => {
+        const sendJoinMessage = () => {
           gameState.isMultiplayer = true;
           gameState.isHost = false;
 
@@ -1187,17 +1210,24 @@
           document.getElementById('p2p-status-dot').innerHTML = '<span class="w-2 h-2 rounded-full bg-mint inline-block"></span> Conectado!';
           document.getElementById('room-status-badge').textContent = `SALA: ${currentRoomCode}`;
 
-          // Send JOIN or RECONNECT message
+          // Send JOIN or RECONNECT message including tabSessionId for local testing
           clientConnection.send({
             type: 'JOIN_OR_RECONNECT',
             userId: localUser.userId,
+            tabSessionId: tabSessionId,
             name: localUser.name,
             avatar: localUser.avatar
           });
 
           // Remember last joined room for transparent reconnection
           try { localStorage.setItem('taco_chaos_last_room', currentRoomCode); } catch (e) {}
-        });
+        };
+
+        if (clientConnection.open) {
+          sendJoinMessage();
+        } else {
+          clientConnection.on('open', sendJoinMessage);
+        }
 
         clientConnection.on('data', (data) => {
           handleClientReceivedMessage(data);
@@ -1248,9 +1278,19 @@
     // =========================================================================
     function broadcastToClients(msg) {
       if (!gameState.isHost) return;
-      hostConnections.forEach(conn => {
+      const targetConns = new Set();
+      hostConnections.forEach(c => targetConns.add(c));
+      gameState.slots.forEach(s => {
+        if (s.conn) targetConns.add(s.conn);
+      });
+
+      targetConns.forEach(conn => {
         if (conn && conn.open) {
-          try { conn.send(msg); } catch (e) {}
+          try {
+            conn.send(msg);
+          } catch (e) {
+            console.warn('Error broadcasting message to client:', e);
+          }
         }
       });
     }
@@ -1259,15 +1299,28 @@
       if (!data || !data.type) return;
 
       if (data.type === 'JOIN_OR_RECONNECT') {
-        // Check if player is RECONNECTING with existing userId
-        const existingSlotIdx = gameState.slots.findIndex(s => s.userId === data.userId);
+        addHostConnection(conn);
 
-        if (existingSlotIdx !== -1) {
+        // If coming from another tab on the same browser (same userId as Host, but different tabSessionId):
+        // Automatically differentiate player so two tabs on same machine can play seamlessly!
+        const isSameMachineTab = (data.userId === gameState.slots[0].userId && data.tabSessionId !== tabSessionId);
+        let effectiveUserId = data.userId;
+        let effectiveName = data.name;
+
+        if (isSameMachineTab) {
+          effectiveUserId = 'local_' + data.tabSessionId;
+          effectiveName = data.name + ' (Aba 2)';
+        }
+
+        // Check if player is RECONNECTING to a disconnected slot
+        const existingSlotIdx = gameState.slots.findIndex(s => s.userId === effectiveUserId);
+
+        if (existingSlotIdx !== -1 && (gameState.slots[existingSlotIdx].isBot || !gameState.slots[existingSlotIdx].conn)) {
           // Reconnect to existing slot!
           const slot = gameState.slots[existingSlotIdx];
           slot.conn = conn;
           slot.isBot = false;
-          slot.name = data.name;
+          slot.name = effectiveName;
           slot.avatar = data.avatar;
 
           conn.send({
@@ -1294,8 +1347,8 @@
           const newSlotIdx = gameState.slots.length;
           gameState.slots.push({
             id: 'client_' + newSlotIdx,
-            userId: data.userId,
-            name: data.name,
+            userId: effectiveUserId,
+            name: effectiveName,
             avatar: data.avatar,
             isBot: false,
             isHost: false,
@@ -1316,7 +1369,7 @@
 
           renderLobbySlots();
           updateOpponentsUI();
-          showToast(`${data.name} entrou na sala!`, 'border-cyan');
+          showToast(`${effectiveName} entrou na sala!`, 'border-cyan');
         } else {
           conn.send({ type: 'ROOM_FULL' });
         }
@@ -1373,6 +1426,7 @@
       }
 
       else if (data.type === 'GAME_STARTED') {
+        document.getElementById('active-card-slot').innerHTML = '';
         applySyncedState(data.fullState);
         switchTab('play');
         showToast('A partida começou!', 'border-mint');
@@ -1387,6 +1441,7 @@
         renderCardInCenter(data.card, data.modifier);
         sfxCardFlip(data.wordIndex);
         updateHUD();
+        updateOpponentsUI();
         setTurnUI();
       }
 
@@ -1404,6 +1459,12 @@
       else if (data.type === 'ROUND_RESOLVED') {
         applySyncedState(data.fullState);
         triggerDefeatMeme(data.loserSlot, data.meme);
+        setTimeout(() => {
+          gameState.roundLocked = false;
+          updateHUD();
+          updateOpponentsUI();
+          setTurnUI();
+        }, 1600);
       }
 
       else if (data.type === 'STICKER_BROADCAST') {
@@ -1591,6 +1652,8 @@
       localUser.stats.matches = (localUser.stats.matches || 0) + 1;
       saveUserToStorage();
 
+      document.getElementById('active-card-slot').innerHTML = '';
+
       broadcastToClients({
         type: 'GAME_STARTED',
         fullState: getPublicGameState()
@@ -1618,6 +1681,7 @@
       gameState.slapOrder = [];
       gameState.roundLocked = false;
 
+      document.getElementById('active-card-slot').innerHTML = '';
       document.getElementById('slap-hands-layer').innerHTML = '';
       document.getElementById('gesture-prompt').classList.add('hidden');
       document.getElementById('sensor-sim-bar').classList.add('hidden');
@@ -1682,6 +1746,7 @@
       renderCardInCenter(card, modifier);
       sfxCardFlip(gameState.wordIndex);
       updateHUD();
+      updateOpponentsUI();
 
       const isMatch = (card.id === spokenWord) || Boolean(card.special);
 

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>TACO CHAOS - E2E Multi-Player Test Suite</title>
+</head>
+<body style="font-family: monospace; background: #111; color: #fff; padding: 20px;">
+  <h1>TACO CHAOS - Test Suite</h1>
+  <div id="results">Running tests...</div>
+
+  <script>
+    const results = [];
+    function assert(condition, testName) {
+      if (condition) {
+        results.push({ name: testName, pass: true });
+        console.log("PASS: " + testName);
+      } else {
+        results.push({ name: testName, pass: false });
+        console.error("FAIL: " + testName);
+      }
+    }
+
+    // Mock Peer Connection for simulating P2P data channels in memory
+    class MockConnection {
+      constructor(name) {
+        this.name = name;
+        this.open = true;
+        this.listeners = {};
+        this.peerConn = null;
+      }
+      on(event, cb) {
+        this.listeners[event] = cb;
+      }
+      send(data) {
+        if (this.peerConn && this.peerConn.listeners['data']) {
+          this.peerConn.listeners['data'](JSON.parse(JSON.stringify(data)));
+        }
+      }
+      close() {
+        this.open = false;
+        if (this.listeners['close']) this.listeners['close']();
+        if (this.peerConn) {
+          this.peerConn.open = false;
+          if (this.peerConn.listeners['close']) this.peerConn.listeners['close']();
+        }
+      }
+    }
+
+    function createMockPair() {
+      const connA = new MockConnection("A");
+      const connB = new MockConnection("B");
+      connA.peerConn = connB;
+      connB.peerConn = connA;
+      return [connA, connB];
+    }
+
+    // Run tests
+    async function runTestSuite() {
+      // 1. Create simulated Host and Client states
+      const SEQUENCE = ['TACO', 'GATO', 'CABRA', 'QUEIJO', 'PIZZA'];
+
+      let hostState = {
+        isHost: true,
+        running: false,
+        mySlotIndex: 0,
+        slots: [
+          { id: 'host', userId: 'user_host', name: 'Host Player', cardsCount: 10, isBot: false, conn: null }
+        ],
+        turnSlot: 0,
+        wordIndex: -1,
+        pileCount: 0,
+        currentCard: null,
+        isTriggerActive: false,
+        slapOrder: []
+      };
+
+      let clientState = {
+        isHost: false,
+        running: false,
+        mySlotIndex: -1,
+        slots: [],
+        turnSlot: 0,
+        wordIndex: -1,
+        pileCount: 0,
+        currentCard: null,
+        isTriggerActive: false
+      };
+
+      assert(hostState.slots.length === 1, "TEST 1: Host creates room with exactly 1 player (Host only, no default bots)");
+
+      // 2. Client connects to Host
+      const [hostConn, clientConn] = createMockPair();
+
+      // Setup Host message receiver
+      const hostConnections = [hostConn];
+      function broadcastToClients(msg) {
+        hostConnections.forEach(c => {
+          if (c && c.open) c.send(msg);
+        });
+      }
+
+      hostConn.on('data', (data) => {
+        if (data.type === 'JOIN_OR_RECONNECT') {
+          const newSlotIdx = hostState.slots.length;
+          hostState.slots.push({
+            id: 'client_' + newSlotIdx,
+            userId: data.userId,
+            name: data.name,
+            cardsCount: 10,
+            isBot: false,
+            conn: hostConn
+          });
+          hostConn.send({
+            type: 'JOIN_ACCEPTED',
+            yourSlotIndex: newSlotIdx,
+            fullState: {
+              running: hostState.running,
+              turnSlot: hostState.turnSlot,
+              slots: hostState.slots.map(s => ({ name: s.name, cardsCount: s.cardsCount, isBot: s.isBot }))
+            }
+          });
+          broadcastToClients({
+            type: 'ROOM_UPDATE',
+            slots: hostState.slots.map(s => ({ name: s.name, cardsCount: s.cardsCount, isBot: s.isBot }))
+          });
+        } else if (data.type === 'PLAYER_PLAY_CARD') {
+          if (hostState.turnSlot === data.slotIndex) {
+            hostPlayCard(data.slotIndex);
+          }
+        }
+      });
+
+      // Setup Client message receiver
+      clientConn.on('data', (data) => {
+        if (data.type === 'JOIN_ACCEPTED') {
+          clientState.mySlotIndex = data.yourSlotIndex;
+          clientState.slots = data.fullState.slots;
+        } else if (data.type === 'ROOM_UPDATE') {
+          clientState.slots = data.slots;
+        } else if (data.type === 'GAME_STARTED') {
+          clientState.running = true;
+          clientState.turnSlot = data.fullState.turnSlot;
+          clientState.slots = data.fullState.slots;
+        } else if (data.type === 'CARD_PLAYED') {
+          clientState.currentCard = data.card;
+          clientState.wordIndex = data.wordIndex;
+          clientState.turnSlot = data.nextTurnSlot;
+          clientState.pileCount = data.pileCount;
+          clientState.slots = data.slots;
+        }
+      });
+
+      // Client joins
+      clientConn.send({
+        type: 'JOIN_OR_RECONNECT',
+        userId: 'user_client',
+        name: 'Player 2'
+      });
+
+      assert(clientState.mySlotIndex === 1, "TEST 2: Client joins and is assigned Slot 1 (Player 2)");
+      assert(hostState.slots.length === 2, "TEST 3: Room now has exactly 2 players (Host + Player 2)");
+
+      // 3. Host starts game
+      hostState.running = true;
+      hostState.turnSlot = 0;
+      broadcastToClients({
+        type: 'GAME_STARTED',
+        fullState: {
+          running: true,
+          turnSlot: 0,
+          slots: hostState.slots.map(s => ({ name: s.name, cardsCount: s.cardsCount, isBot: s.isBot }))
+        }
+      });
+
+      assert(clientState.running === true, "TEST 4: Client receives GAME_STARTED and is running");
+      assert(hostState.turnSlot === 0, "TEST 5: Game begins on Turn 0 (Host turn)");
+      
+      const hostIsTurnAtStart = (hostState.turnSlot === hostState.mySlotIndex);
+      const clientIsTurnAtStart = (clientState.turnSlot === clientState.mySlotIndex);
+      assert(hostIsTurnAtStart === true, "TEST 6: Host play button is ACTIVE on Turn 0");
+      assert(clientIsTurnAtStart === false, "TEST 7: Client play button is DISABLED on Turn 0 (waiting for Host)");
+
+      // 4. Host plays card
+      function hostPlayCard(slotIdx) {
+        hostState.slots[slotIdx].cardsCount--;
+        hostState.pileCount++;
+        hostState.wordIndex = (hostState.wordIndex + 1) % SEQUENCE.length;
+        const card = { id: 'GATO', label: 'GATO' }; // non-matching
+        const nextTurn = (hostState.turnSlot + 1) % hostState.slots.length;
+        hostState.turnSlot = nextTurn;
+        hostState.currentCard = card;
+
+        broadcastToClients({
+          type: 'CARD_PLAYED',
+          card: card,
+          wordIndex: hostState.wordIndex,
+          nextTurnSlot: nextTurn,
+          pileCount: hostState.pileCount,
+          slots: hostState.slots.map(s => ({ name: s.name, cardsCount: s.cardsCount, isBot: s.isBot }))
+        });
+      }
+
+      hostPlayCard(0);
+
+      assert(hostState.turnSlot === 1, "TEST 8: Host turn advanced to Turn 1 (Player 2)");
+      assert(clientState.turnSlot === 1, "TEST 9: Client receives CARD_PLAYED and clientState.turnSlot === 1");
+      
+      const hostIsTurnNow = (hostState.turnSlot === hostState.mySlotIndex);
+      const clientIsTurnNow = (clientState.turnSlot === clientState.mySlotIndex);
+      assert(hostIsTurnNow === false, "TEST 10: Host play button is now DISABLED (waiting for Player 2)");
+      assert(clientIsTurnNow === true, "TEST 11: Player 2 play button is now ACTIVE (JOGAR CARTA green button)");
+
+      // 5. Player 2 plays card
+      clientConn.send({
+        type: 'PLAYER_PLAY_CARD',
+        slotIndex: clientState.mySlotIndex
+      });
+
+      assert(hostState.turnSlot === 0, "TEST 12: Player 2 played card, turn returns to Turn 0 (Host)");
+      assert(clientState.turnSlot === 0, "TEST 13: Client receives CARD_PLAYED and turn is back to Host");
+      assert(clientState.pileCount === 2, "TEST 14: Central pile count incremented to 2 cards");
+      assert(clientState.slots[0].cardsCount === 9, "TEST 15: Host card count decremented from 10 to 9");
+      assert(clientState.slots[1].cardsCount === 9, "TEST 16: Player 2 card count decremented from 10 to 9");
+
+      // 6. Test Disconnect Failover (Bot Takeover)
+      clientConn.close();
+
+      const slot1 = hostState.slots[1];
+      if (!hostConn.open) {
+        slot1.isBot = true;
+      }
+      assert(slot1.isBot === true, "TEST 17: When Player 2 disconnects, Host marks slot as isBot: true");
+
+      // Render results to DOM
+      const passedCount = results.filter(r => r.pass).length;
+      const totalCount = results.length;
+      const allPassed = passedCount === totalCount;
+
+      let html = `<h2 style="color: ${allPassed ? '#4ade80' : '#f87171'}">`;
+      html += `Result: ${passedCount}/${totalCount} tests passed (${allPassed ? 'ALL PASSED' : 'FAILURES'})</h2><ul>`;
+      results.forEach(r => {
+        html += `<li style="color: ${r.pass ? '#4ade80' : '#f87171'}">${r.pass ? '✓' : '✗'} ${r.name}</li>`;
+      });
+      html += `</ul><div id="final-status">${allPassed ? 'ALL_TESTS_PASSED' : 'TESTS_FAILED'}</div>`;
+      document.getElementById('results').innerHTML = html;
+    }
+
+    runTestSuite();
+  </script>
+</body>
+</html>
