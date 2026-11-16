@@ -442,6 +442,17 @@
             ENTRAR
           </button>
         </div>
+
+        <!-- Quick Solo Mode Option (Only shown when not in a room) -->
+        <div class="bg-surface/60 border border-slate-800/80 rounded-2xl p-3 flex items-center justify-between mt-2">
+          <div class="text-left">
+            <div class="font-display font-bold text-xs text-white">Sem internet ou quer treinar?</div>
+            <div class="text-[10px] text-slate-400">Jogue instantaneamente contra bots locais.</div>
+          </div>
+          <button onclick="startSoloGame(); switchTab('play')" class="px-3 py-1.5 rounded-xl bg-cardbg border border-slate-700 text-xs font-bold text-mint hover:bg-slate-700 transition">
+            Modo Solo
+          </button>
+        </div>
       </div>
 
       <!-- Active Room View (When inside a room) -->
@@ -480,17 +491,6 @@
             <span>🚀</span> INICIAR PARTIDA
           </button>
         </div>
-      </div>
-
-      <!-- Quick Solo Mode Option -->
-      <div class="bg-surface/60 border border-slate-800/80 rounded-2xl p-3 flex items-center justify-between">
-        <div class="text-left">
-          <div class="font-display font-bold text-xs text-white">Sem internet ou quer treinar?</div>
-          <div class="text-[10px] text-slate-400">Jogue instantaneamente contra bots locais.</div>
-        </div>
-        <button onclick="startSoloGame(); switchTab('play')" class="px-3 py-1.5 rounded-xl bg-cardbg border border-slate-700 text-xs font-bold text-mint hover:bg-slate-700 transition">
-          Modo Solo
-        </button>
       </div>
 
     </section>
@@ -1069,6 +1069,80 @@
       return code;
     }
 
+    function renderTableOverlay() {
+      const slot = document.getElementById('active-card-slot');
+      if (!slot) return;
+
+      // If game is actively running, never show the lobby/start card
+      if (gameState.running) {
+        if (gameState.currentCard) {
+          renderCardInCenter(gameState.currentCard, { id: 'NONE', label: 'NORMAL', class: '' });
+        } else {
+          slot.innerHTML = '';
+        }
+        return;
+      }
+
+      // If inside a Multiplayer Room (before match start)
+      if (gameState.isMultiplayer && currentRoomCode) {
+        const playerCount = gameState.slots ? gameState.slots.length : 1;
+        if (gameState.isHost) {
+          slot.innerHTML = `
+            <div id="start-overlay" class="w-full h-full rounded-[26px] bg-gradient-to-br from-surface to-cardbg border-2 border-electric neo-shadow flex flex-col items-center justify-center p-3 text-center z-20">
+              <div class="text-3xl mb-1">👑⚡</div>
+              <span class="text-[9px] font-extrabold uppercase tracking-widest text-electric mb-0.5">SALA MULTIPLAYER</span>
+              <h2 class="font-display font-bold text-xl text-white tracking-widest leading-tight mb-1">${currentRoomCode}</h2>
+              <p class="text-[10px] text-slate-300 mb-3">
+                ${playerCount} participante${playerCount > 1 ? 's' : ''} na sala.
+              </p>
+              <div class="flex flex-col gap-1.5 w-full">
+                <button onclick="hostStartGame()" class="w-full py-2.5 rounded-xl bg-mint text-void font-display font-bold text-xs neo-shadow-sm neo-active hover:brightness-110 transition flex items-center justify-center gap-1.5">
+                  <span>🚀</span> INICIAR PARTIDA
+                </button>
+                <button onclick="switchTab('lobby')" class="w-full py-2 rounded-xl bg-cardbg border border-slate-700 text-slate-300 font-display font-bold text-xs hover:bg-slate-700 transition">
+                  👥 Ver Sala & Amigos (${playerCount}/6)
+                </button>
+              </div>
+            </div>
+          `;
+        } else {
+          slot.innerHTML = `
+            <div id="start-overlay" class="w-full h-full rounded-[26px] bg-gradient-to-br from-surface to-cardbg border-2 border-cyan neo-shadow flex flex-col items-center justify-center p-3 text-center z-20">
+              <div class="text-3xl mb-1">🎮⚡</div>
+              <span class="text-[9px] font-extrabold uppercase tracking-widest text-cyan mb-0.5">SALA MULTIPLAYER</span>
+              <h2 class="font-display font-bold text-xl text-white tracking-widest leading-tight mb-1">${currentRoomCode}</h2>
+              <p class="text-[10px] text-slate-300 mb-3">
+                Aguardando o Host iniciar a partida...
+              </p>
+              <button onclick="switchTab('lobby')" class="w-full py-2 rounded-xl bg-cardbg border border-slate-700 text-slate-300 font-display font-bold text-xs hover:bg-slate-700 transition">
+                👥 Ver Sala (${playerCount}/6)
+              </button>
+            </div>
+          `;
+        }
+        return;
+      }
+
+      // Default welcome overlay when NOT in any room
+      slot.innerHTML = `
+        <div id="start-overlay" class="w-full h-full rounded-[26px] bg-gradient-to-br from-surface to-cardbg border-2 border-slate-700 neo-shadow flex flex-col items-center justify-center p-3 text-center z-20">
+          <div class="text-3xl mb-1">🃏⚡</div>
+          <h2 class="font-display font-bold text-base text-white leading-tight mb-1">Taco Gato Chaos</h2>
+          <p class="text-[10px] text-slate-400 mb-3 leading-relaxed">
+            Jogue em modo Solo ou crie uma Sala P2P para até 6 amigos no celular!
+          </p>
+          <div class="flex flex-col gap-1.5 w-full">
+            <button onclick="startSoloGame()" class="w-full py-2.5 rounded-xl bg-mint text-void font-display font-bold text-xs neo-shadow-sm neo-active hover:brightness-110 transition">
+              🎮 JOGAR SOLO (VS BOTS)
+            </button>
+            <button onclick="switchTab('lobby')" class="w-full py-2 rounded-xl bg-cardbg border border-slate-700 text-electric font-display font-bold text-xs hover:bg-slate-700 transition">
+              👥 SALA MULTIPLAYER (ATÉ 6)
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
     function createP2PRoom() {
       initAudio();
       currentRoomCode = generateRoomCode();
@@ -1106,6 +1180,7 @@
         document.getElementById('room-status-badge').textContent = `SALA: ${currentRoomCode} (HOST)`;
 
         renderLobbySlots();
+        renderTableOverlay();
         showToast(`Sala ${currentRoomCode} criada! Compartilhe o código!`, 'border-mint');
       });
 
@@ -1219,6 +1294,8 @@
             avatar: localUser.avatar
           });
 
+          renderTableOverlay();
+
           // Remember last joined room for transparent reconnection
           try { localStorage.setItem('taco_chaos_last_room', currentRoomCode); } catch (e) {}
         };
@@ -1261,6 +1338,7 @@
       document.getElementById('p2p-status-dot').innerHTML = '<span class="w-2 h-2 rounded-full bg-yellow-400 inline-block"></span> Pronto';
       document.getElementById('room-status-badge').textContent = 'P2P PARTY GAME';
 
+      renderTableOverlay();
       showToast('Você saiu da sala.', 'border-coral');
     }
 
@@ -1368,6 +1446,7 @@
           });
 
           renderLobbySlots();
+          renderTableOverlay();
           updateOpponentsUI();
           showToast(`${effectiveName} entrou na sala!`, 'border-cyan');
         } else {
@@ -1412,6 +1491,7 @@
         gameState.mySlotIndex = data.yourSlotIndex;
         applySyncedState(data.fullState);
         renderLobbySlots();
+        renderTableOverlay();
         updateOpponentsUI();
         if (data.type === 'RECONNECT_SUCCESS') {
           showToast('Você voltou à partida!', 'border-mint');
@@ -1422,6 +1502,7 @@
       else if (data.type === 'ROOM_UPDATE') {
         gameState.slots = data.slots;
         renderLobbySlots();
+        renderTableOverlay();
         updateOpponentsUI();
       }
 
@@ -1638,10 +1719,14 @@
     }
 
     function hostStartGame() {
-      if (!gameState.isHost || gameState.slots.length < 2) {
-        showToast('Adicione pelo menos 2 participantes para iniciar!', 'border-coral');
-        return;
+      if (!gameState.isHost) return;
+
+      // If host is alone in the room, automatically add a bot so the host is never blocked!
+      if (gameState.slots.length < 2) {
+        addBotToNextSlot();
+        showToast('Adicionamos um bot para você poder jogar!', 'border-electric');
       }
+
       initAudio();
       clearAllTimers();
 
@@ -2281,6 +2366,9 @@
     }
 
     function switchTab(tabName) {
+      if (tabName === 'play' && !gameState.running) {
+        renderTableOverlay();
+      }
       ['play', 'lobby', 'visual', 'arch'].forEach(t => {
         const view = document.getElementById(`view-${t}`);
         const btn = document.getElementById(`tab-${t}`);
@@ -2309,6 +2397,7 @@
     // =========================================================================
     window.addEventListener('DOMContentLoaded', () => {
       initUserAccount();
+      renderTableOverlay();
 
       // Check URL Hash for direct invite link (e.g. #sala=TACO5)
       const hash = window.location.hash;

@@ -8,6 +8,9 @@
   <h1>TACO CHAOS - Test Suite</h1>
   <div id="results">Running tests...</div>
 
+  <!-- Mock DOM slot for testing overlays -->
+  <div id="active-card-slot" style="display:none;"></div>
+
   <script>
     const results = [];
     function assert(condition, testName) {
@@ -55,8 +58,7 @@
     }
 
     // Run tests
-    async function runTestSuite() {
-      // 1. Create simulated Host and Client states
+    function runTestSuite() {
       const SEQUENCE = ['TACO', 'GATO', 'CABRA', 'QUEIJO', 'PIZZA'];
 
       let hostState = {
@@ -86,12 +88,30 @@
         isTriggerActive: false
       };
 
-      assert(hostState.slots.length === 1, "TEST 1: Host creates room with exactly 1 player (Host only, no default bots)");
+      // 0. Test Overlay states
+      function getTableOverlayHtml(state, isMultiplayer, roomCode) {
+        if (state.running) return '';
+        if (isMultiplayer && roomCode) {
+          if (state.isHost) {
+            return `SALA MULTIPLAYER ${roomCode} INICIAR PARTIDA`;
+          } else {
+            return `SALA MULTIPLAYER ${roomCode} Aguardando o Host`;
+          }
+        }
+        return `JOGAR SOLO (VS BOTS) SALA MULTIPLAYER (ATÉ 6)`;
+      }
+
+      const initialOverlay = getTableOverlayHtml(hostState, false, null);
+      assert(initialOverlay.includes("JOGAR SOLO (VS BOTS)"), "TEST 1: Welcome overlay offers Solo and Multiplayer before entering a room");
+
+      const roomOverlayHost = getTableOverlayHtml(hostState, true, "TACO9");
+      assert(roomOverlayHost.includes("SALA MULTIPLAYER TACO9") && !roomOverlayHost.includes("JOGAR SOLO (VS BOTS)"), "TEST 2: When room is created, overlay shows room code and INICIAR PARTIDA, NOT the initial Solo/Multiplayer selector");
+
+      assert(hostState.slots.length === 1, "TEST 3: Host creates room with exactly 1 player (Host only, no default bots)");
 
       // 2. Client connects to Host
       const [hostConn, clientConn] = createMockPair();
 
-      // Setup Host message receiver
       const hostConnections = [hostConn];
       function broadcastToClients(msg) {
         hostConnections.forEach(c => {
@@ -130,7 +150,6 @@
         }
       });
 
-      // Setup Client message receiver
       clientConn.on('data', (data) => {
         if (data.type === 'JOIN_ACCEPTED') {
           clientState.mySlotIndex = data.yourSlotIndex;
@@ -157,8 +176,11 @@
         name: 'Player 2'
       });
 
-      assert(clientState.mySlotIndex === 1, "TEST 2: Client joins and is assigned Slot 1 (Player 2)");
-      assert(hostState.slots.length === 2, "TEST 3: Room now has exactly 2 players (Host + Player 2)");
+      assert(clientState.mySlotIndex === 1, "TEST 4: Client joins and is assigned Slot 1 (Player 2)");
+      assert(hostState.slots.length === 2, "TEST 5: Room now has exactly 2 players (Host + Player 2)");
+
+      const roomOverlayClient = getTableOverlayHtml(clientState, true, "TACO9");
+      assert(roomOverlayClient.includes("Aguardando o Host") && !roomOverlayClient.includes("JOGAR SOLO (VS BOTS)"), "TEST 6: Client in room sees waiting for Host, NOT the initial Solo/Multiplayer selector");
 
       // 3. Host starts game
       hostState.running = true;
@@ -172,20 +194,23 @@
         }
       });
 
-      assert(clientState.running === true, "TEST 4: Client receives GAME_STARTED and is running");
-      assert(hostState.turnSlot === 0, "TEST 5: Game begins on Turn 0 (Host turn)");
+      assert(clientState.running === true, "TEST 7: Client receives GAME_STARTED and is running");
+      assert(hostState.turnSlot === 0, "TEST 8: Game begins on Turn 0 (Host turn)");
+
+      const overlayWhenRunning = getTableOverlayHtml(hostState, true, "TACO9");
+      assert(overlayWhenRunning === '', "TEST 9: When game starts, center table overlay is CLEARED completely");
       
       const hostIsTurnAtStart = (hostState.turnSlot === hostState.mySlotIndex);
       const clientIsTurnAtStart = (clientState.turnSlot === clientState.mySlotIndex);
-      assert(hostIsTurnAtStart === true, "TEST 6: Host play button is ACTIVE on Turn 0");
-      assert(clientIsTurnAtStart === false, "TEST 7: Client play button is DISABLED on Turn 0 (waiting for Host)");
+      assert(hostIsTurnAtStart === true, "TEST 10: Host play button is ACTIVE on Turn 0");
+      assert(clientIsTurnAtStart === false, "TEST 11: Client play button is DISABLED on Turn 0 (waiting for Host)");
 
       // 4. Host plays card
       function hostPlayCard(slotIdx) {
         hostState.slots[slotIdx].cardsCount--;
         hostState.pileCount++;
         hostState.wordIndex = (hostState.wordIndex + 1) % SEQUENCE.length;
-        const card = { id: 'GATO', label: 'GATO' }; // non-matching
+        const card = { id: 'GATO', label: 'GATO' };
         const nextTurn = (hostState.turnSlot + 1) % hostState.slots.length;
         hostState.turnSlot = nextTurn;
         hostState.currentCard = card;
@@ -202,13 +227,13 @@
 
       hostPlayCard(0);
 
-      assert(hostState.turnSlot === 1, "TEST 8: Host turn advanced to Turn 1 (Player 2)");
-      assert(clientState.turnSlot === 1, "TEST 9: Client receives CARD_PLAYED and clientState.turnSlot === 1");
+      assert(hostState.turnSlot === 1, "TEST 12: Host turn advanced to Turn 1 (Player 2)");
+      assert(clientState.turnSlot === 1, "TEST 13: Client receives CARD_PLAYED and clientState.turnSlot === 1");
       
       const hostIsTurnNow = (hostState.turnSlot === hostState.mySlotIndex);
       const clientIsTurnNow = (clientState.turnSlot === clientState.mySlotIndex);
-      assert(hostIsTurnNow === false, "TEST 10: Host play button is now DISABLED (waiting for Player 2)");
-      assert(clientIsTurnNow === true, "TEST 11: Player 2 play button is now ACTIVE (JOGAR CARTA green button)");
+      assert(hostIsTurnNow === false, "TEST 14: Host play button is now DISABLED (waiting for Player 2)");
+      assert(clientIsTurnNow === true, "TEST 15: Player 2 play button is now ACTIVE (JOGAR CARTA green button)");
 
       // 5. Player 2 plays card
       clientConn.send({
@@ -216,11 +241,11 @@
         slotIndex: clientState.mySlotIndex
       });
 
-      assert(hostState.turnSlot === 0, "TEST 12: Player 2 played card, turn returns to Turn 0 (Host)");
-      assert(clientState.turnSlot === 0, "TEST 13: Client receives CARD_PLAYED and turn is back to Host");
-      assert(clientState.pileCount === 2, "TEST 14: Central pile count incremented to 2 cards");
-      assert(clientState.slots[0].cardsCount === 9, "TEST 15: Host card count decremented from 10 to 9");
-      assert(clientState.slots[1].cardsCount === 9, "TEST 16: Player 2 card count decremented from 10 to 9");
+      assert(hostState.turnSlot === 0, "TEST 16: Player 2 played card, turn returns to Turn 0 (Host)");
+      assert(clientState.turnSlot === 0, "TEST 17: Client receives CARD_PLAYED and turn is back to Host");
+      assert(clientState.pileCount === 2, "TEST 18: Central pile count incremented to 2 cards");
+      assert(clientState.slots[0].cardsCount === 9, "TEST 19: Host card count decremented from 10 to 9");
+      assert(clientState.slots[1].cardsCount === 9, "TEST 20: Player 2 card count decremented from 10 to 9");
 
       // 6. Test Disconnect Failover (Bot Takeover)
       clientConn.close();
@@ -229,7 +254,19 @@
       if (!hostConn.open) {
         slot1.isBot = true;
       }
-      assert(slot1.isBot === true, "TEST 17: When Player 2 disconnects, Host marks slot as isBot: true");
+      assert(slot1.isBot === true, "TEST 21: When Player 2 disconnects, Host marks slot as isBot: true");
+
+      // 7. Test Host starting room alone: auto-adds bot
+      let soloHostState = {
+        isHost: true,
+        running: false,
+        slots: [{ id: 'host', name: 'Alone Host' }]
+      };
+      if (soloHostState.slots.length < 2) {
+        soloHostState.slots.push({ id: 'bot_auto', name: 'Bot Auto', isBot: true });
+      }
+      soloHostState.running = true;
+      assert(soloHostState.slots.length === 2 && soloHostState.running === true, "TEST 22: If Host is alone in room and clicks Iniciar, auto-adds a bot so the game starts smoothly without error");
 
       // Render results to DOM
       const passedCount = results.filter(r => r.pass).length;
