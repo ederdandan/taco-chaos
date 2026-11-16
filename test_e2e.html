@@ -67,10 +67,12 @@
     // ----- Cópias de constantes / utilitários do index.html -----
     const SEQUENCE = ['TACO', 'GATO', 'CABRA', 'QUEIJO', 'PIZZA'];
     const SPECIALS = ['GORILA', 'NARVAL', 'MARMOTA'];
+    const TRAP = 'PREGUICA'; // Carta-armadilha: nunca é gatilho
     const AVATAR_OPTIONS = ['😎', '⚡', '🐱', '🌮', '🍕', '👾', '🦄', '🦍', '🧙', '👑', '🦊', '🤖', '🦫', '🔥', '💀', '🤡', '🧀', '🚀'];
     const STICKERS = { '🌮': 'Taco!', '🔥': 'Fogo!' };
     const RESOLVE_TIMEOUT_MS = 2800, ROUND_UNLOCK_MS = 1600, RESOLVE_DELAY_MS = 850;
     const FALSE_START_MEME_INDEX = 5;
+    const TRAP_MEME_INDEX = 6;
 
     function escapeHtml(value) {
       return String(value == null ? '' : value)
@@ -89,6 +91,7 @@
       const roll = rnd();
       if (roll < 0.28) return spokenWord;
       if (roll < 0.44) return SPECIALS[Math.floor(rnd() * SPECIALS.length)];
+      if (roll < 0.52) return TRAP;
       const others = SEQUENCE.filter(w => w !== spokenWord);
       return others[Math.floor(rnd() * others.length)];
     }
@@ -247,7 +250,7 @@
         S.currentCardId = cardId;
         S.turnSlot = (S.turnSlot + 1) % S.slots.length;
         H.broadcast({ type: 'CARD_PLAYED', cardId, modifierId: 'NONE', wordIndex: S.wordIndex, turnSlot: S.turnSlot, pileCount: S.pileCount, slots: H.sanitizedSlots() });
-        const isMatch = cardId === spoken || SPECIALS.includes(cardId);
+        const isMatch = cardId !== TRAP && (cardId === spoken || SPECIALS.includes(cardId));
         if (isMatch) H.activateTrigger(cardId); else H.advanceTurn();
       };
 
@@ -302,7 +305,7 @@
         if (!S.running || S.roundLocked || S.isTriggerActive || S.pileCount <= 0) return;
         S.roundLocked = true;
         H.clearAllTimers();
-        H.resolvePile(slotIndex, FALSE_START_MEME_INDEX);
+        H.resolvePile(slotIndex, S.currentCardId === TRAP ? TRAP_MEME_INDEX : FALSE_START_MEME_INDEX);
       };
 
       H.registerSlap = (slotIndex, opts = {}) => {
@@ -558,6 +561,20 @@
       // --- C6: sair no lobby libera a vaga ---
       sameBrowser.conn.close();
       assert(host.state.slots.length === 2 && host.state.slots.every(s => !s.isBot || String(s.id).startsWith('bot_')), 'TEST 47 (C6): Leaving in the lobby frees the slot instead of creating a bot');
+
+      // --- Carta-armadilha (PREGUIÇA) ---
+      let traps = 0;
+      for (let i = 0; i < N; i++) { if (pickNextCard(SEQUENCE[i % 5]) === TRAP) traps++; }
+      assert(Math.abs(traps / N - 0.08) < 0.015, `TEST 47a: Trap card appears ~8% (got ${(traps / N).toFixed(3)})`);
+      const th = createHost('trap_host');
+      const tc = connectClient(th, 'trap_client', 'tab_t', 'Trap');
+      th.start();
+      th.nextCard = () => TRAP;
+      th.playCard(0);
+      assert(!th.state.isTriggerActive && !tc.state.isTriggerActive && tc.state.currentCardId === TRAP, 'TEST 47b: Trap card is shown but never activates the trigger');
+      tc.slap();
+      const trapEvent = th.events[th.events.length - 1];
+      assert(trapEvent && trapEvent.loserIdx === 1 && trapEvent.memeIndex === TRAP_MEME_INDEX, 'TEST 47c: Slapping the trap takes the pile with the trap meme');
 
       // --- Host sozinho inicia com bot automático ---
       const alone = createHost('solo_host');

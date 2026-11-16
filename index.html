@@ -11,6 +11,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- PeerJS for 100% Client-Side WebRTC Multiplayer (Zero Backend Required) -->
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <!-- QR Code do link da sala (para amigos no mesmo ambiente entrarem pela câmera) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -473,8 +475,11 @@
             <div id="active-room-code" class="font-display font-bold text-xl text-electric tracking-widest">-----</div>
           </div>
           <div class="flex items-center gap-1.5">
+            <button onclick="openQrModal()" class="px-2.5 py-1.5 rounded-xl bg-electric text-void text-[10px] font-bold neo-shadow-sm neo-active flex items-center gap-1" title="Mostrar QR Code da sala">
+              <span>📱</span> QR
+            </button>
             <button onclick="copyRoomLink()" class="px-2.5 py-1.5 rounded-xl bg-cardbg border border-slate-700 text-[10px] font-bold text-slate-200 hover:bg-slate-700 transition flex items-center gap-1">
-              <span>📋</span> Copiar Link
+              <span>📋</span> Link
             </button>
             <button onclick="leaveP2PRoom()" class="px-2.5 py-1.5 rounded-xl bg-red-950/60 border border-coral text-[10px] font-bold text-coral hover:bg-coral hover:text-white transition">
               Sair
@@ -568,6 +573,17 @@
               <p class="text-[10px] text-slate-400">Sacuda o aparelho fisicamente ou aperte Simular.</p>
             </div>
           </div>
+
+          <div class="bg-surface border border-coral/60 rounded-2xl p-2.5 flex items-center gap-2.5">
+            <div class="w-10 h-10 rounded-xl bg-coral/20 border-2 border-coral flex items-center justify-center text-xl shrink-0">🦥</div>
+            <div>
+              <div class="flex items-center gap-1.5">
+                <span class="font-display font-bold text-xs text-white">PREGUIÇA</span>
+                <span class="text-[8px] font-bold bg-coral/30 text-red-200 px-1 py-0.5 rounded">ARMADILHA 🚫</span>
+              </div>
+              <p class="text-[10px] text-slate-400">NÃO bata! Quem cair na armadilha leva o monte.</p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -626,8 +642,8 @@
     <!-- ===================================================================== -->
 
     <!-- Profile & Account Modal -->
-    <div id="profile-modal" class="hidden absolute inset-0 bg-void/95 backdrop-blur-md z-50 p-5 flex flex-col justify-between">
-      <div>
+    <div id="profile-modal" class="hidden absolute inset-0 bg-void/95 backdrop-blur-md z-50 p-5 flex flex-col justify-between gap-3">
+      <div class="min-h-0 overflow-y-auto no-scrollbar">
         <div class="flex items-center justify-between mb-3">
           <h2 class="font-display font-bold text-lg text-white">Minha Conta Local</h2>
           <button onclick="closeProfileModal()" class="w-8 h-8 rounded-full bg-surface border border-slate-700 text-slate-300 font-bold">✕</button>
@@ -668,6 +684,25 @@
             </div>
           </div>
         </div>
+
+        <!-- Preferências de jogo (aplicadas na hora) -->
+        <div class="bg-surface border border-slate-800 rounded-2xl p-3 mt-3 space-y-2.5">
+          <div class="text-[10px] font-bold uppercase text-slate-400">Preferências</div>
+          <label class="flex items-center justify-between gap-3 cursor-pointer">
+            <span>
+              <span class="block text-xs font-bold text-white">🗣️ Narrar palavras</span>
+              <span class="block text-[10px] text-slate-400">O jogo fala TACO, GATO, CABRA… a cada carta.</span>
+            </span>
+            <input id="pref-voice" type="checkbox" onchange="setPref('voice', this.checked)" class="w-5 h-5 accent-[#06D6A0] shrink-0">
+          </label>
+          <label class="flex items-center justify-between gap-3 cursor-pointer">
+            <span>
+              <span class="block text-xs font-bold text-white">🙈 Modo difícil</span>
+              <span id="pref-hideword-sub" class="block text-[10px] text-slate-400">Esconde a palavra escrita: só vale o que você ouve.</span>
+            </span>
+            <input id="pref-hideword" type="checkbox" onchange="setPref('hideWord', this.checked)" class="w-5 h-5 accent-[#FF4D6D] shrink-0">
+          </label>
+        </div>
       </div>
 
       <button onclick="saveUserProfile()" class="w-full py-3 rounded-2xl bg-coral text-white font-display font-bold text-sm neo-shadow-sm neo-active">
@@ -676,8 +711,8 @@
     </div>
 
     <!-- Rules Modal -->
-    <div id="rules-modal" class="hidden absolute inset-0 bg-void/95 backdrop-blur-md z-50 p-5 flex flex-col justify-between">
-      <div>
+    <div id="rules-modal" class="hidden absolute inset-0 bg-void/95 backdrop-blur-md z-50 p-5 flex flex-col justify-between gap-3">
+      <div class="min-h-0 overflow-y-auto no-scrollbar">
         <div class="flex items-center justify-between mb-3">
           <h2 class="font-display font-bold text-lg text-electric">Regras do Jogo</h2>
           <button onclick="closeRulesModal()" class="w-8 h-8 rounded-full bg-surface border border-slate-700 text-slate-300 font-bold">✕</button>
@@ -690,6 +725,7 @@
           <div class="bg-surface p-2.5 rounded-2xl border border-slate-800">
             <strong class="text-mint block mb-0.5">2. Quando Bater no Centro?</strong>
             Bata na carta central quando a <strong>Palavra falada</strong> for igual à <strong>Carta revelada</strong> OU sair uma <strong>Carta Especial</strong>!
+            <span class="block mt-1 text-coral font-bold">🦥 Exceção: na PREGUIÇA, NÃO bata — é armadilha!</span>
           </div>
           <div class="bg-surface p-2.5 rounded-2xl border border-slate-800">
             <strong class="text-coral block mb-0.5">3. Quem Leva o Monte?</strong>
@@ -699,11 +735,30 @@
             <strong class="text-cyan block mb-0.5">4. Gestos e Teclado</strong>
             🦍 toque 2x · 🦄 deslize ↑ · 🦫 sacuda o celular. No PC: <strong>↑</strong> joga carta / chifre, <strong>Espaço</strong> bate, <strong>S</strong> sacode.
           </div>
+          <div class="bg-surface p-2.5 rounded-2xl border border-slate-800">
+            <strong class="text-electric block mb-0.5">5. Voz e Modo Difícil</strong>
+            O jogo fala cada palavra em voz alta. No <strong>Modo Difícil</strong> (no seu Perfil) a palavra escrita some: bata pelo que você <em>ouve</em>!
+          </div>
         </div>
       </div>
       <button onclick="closeRulesModal()" class="w-full py-3 rounded-2xl bg-coral text-white font-display font-bold text-sm neo-shadow-sm">
         VAMOS JOGAR!
       </button>
+    </div>
+
+    <!-- QR Code da Sala -->
+    <div id="qr-modal" class="hidden absolute inset-0 bg-void/95 backdrop-blur-md z-50 p-5 flex flex-col items-center justify-center text-center" onclick="if (event.target === this) closeQrModal()">
+      <div class="w-full max-w-[300px] bg-surface border-2 border-electric rounded-3xl p-4 neo-shadow">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] font-extrabold uppercase tracking-wider text-electric">Aponte a câmera para entrar</span>
+          <button onclick="closeQrModal()" class="w-7 h-7 rounded-full bg-cardbg border border-slate-700 text-slate-300 text-xs font-bold">✕</button>
+        </div>
+        <div id="qr-code-box" class="mx-auto my-2 w-[208px] h-[208px] bg-white rounded-2xl p-3 flex items-center justify-center"></div>
+        <div class="text-[9px] text-slate-400 font-bold uppercase tracking-wider mt-2">Código da Sala</div>
+        <div id="qr-room-code" class="font-display font-bold text-3xl text-white tracking-[0.25em]">-----</div>
+        <p id="qr-room-hint" class="text-[10px] text-slate-400 mt-1 leading-snug">Ou digite o código em “Salas → Entrar com código”.</p>
+        <button onclick="copyRoomLink()" class="mt-3 w-full py-2.5 rounded-xl bg-cardbg border border-slate-700 text-xs font-bold text-slate-200 hover:bg-slate-700 transition">📋 Copiar link</button>
+      </div>
     </div>
 
     <!-- Defeat Meme Popup Notification (Explodes when someone loses) -->
@@ -765,8 +820,13 @@
       userId: '',
       name: 'Jogador',
       avatar: '😎',
-      stats: { matches: 0, wins: 0, slaps: 0 }
+      stats: { matches: 0, wins: 0, slaps: 0 },
+      prefs: null
     };
+
+    // voice: narrar a palavra; hideWord: modo difícil (palavra só no áudio)
+    const DEFAULT_PREFS = { voice: true, hideWord: false };
+    localUser.prefs = { ...DEFAULT_PREFS };
 
     function initUserAccount() {
       try {
@@ -779,7 +839,8 @@
             ...parsed,
             name: String(parsed.name || 'Jogador').slice(0, 14),
             avatar: AVATAR_OPTIONS.includes(parsed.avatar) ? parsed.avatar : '😎',
-            stats: { matches: 0, wins: 0, slaps: 0, ...(parsed.stats || {}) }
+            stats: { matches: 0, wins: 0, slaps: 0, ...(parsed.stats || {}) },
+            prefs: { ...DEFAULT_PREFS, ...(parsed.prefs || {}) }
           };
         } else {
           // Generate new account
@@ -817,6 +878,7 @@
       document.getElementById('stat-wins').textContent = localUser.stats.wins || 0;
       document.getElementById('stat-slaps').textContent = localUser.stats.slaps || 0;
       renderAvatarGrid();
+      renderPrefControls();
       document.getElementById('profile-modal').classList.remove('hidden');
     }
 
@@ -893,7 +955,10 @@
       if (soundEnabled) {
         initAudio();
         playTone(520, 'sine', 0.08, 0.15);
+      } else if (TTS_SUPPORTED) {
+        try { window.speechSynthesis.cancel(); } catch (e) {}
       }
+      updateHUD(); // Sem som, o modo difícil é suspenso e a palavra volta a aparecer
     }
 
     function playTone(freq, type = 'sine', duration = 0.1, vol = 0.2, delay = 0) {
@@ -941,6 +1006,68 @@
 
     function sfxPop() {
       playTone(620, 'sine', 0.06, 0.18);
+    }
+
+    // ----- Narração das palavras (Web Speech API, voz do próprio aparelho) -----
+    const TTS_SUPPORTED = 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
+    let ttsVoice = null;
+
+    function pickTtsVoice() {
+      if (!TTS_SUPPORTED) return;
+      const voices = window.speechSynthesis.getVoices();
+      ttsVoice = voices.find(v => v.lang === 'pt-BR')
+        || voices.find(v => v.lang && v.lang.toLowerCase().startsWith('pt'))
+        || null;
+    }
+    if (TTS_SUPPORTED) {
+      pickTtsVoice();
+      window.speechSynthesis.onvoiceschanged = pickTtsVoice;
+    }
+
+    // Voz efetivamente ativa (preferência + som ligado + suporte do navegador)
+    function isVoiceActive() {
+      return TTS_SUPPORTED && soundEnabled && !!(localUser.prefs && localUser.prefs.voice);
+    }
+
+    // Modo difícil só vale se a voz estiver ativa (senão o jogo ficaria impossível)
+    function isHardModeActive() {
+      return isVoiceActive() && !!localUser.prefs.hideWord;
+    }
+
+    function speakWord(word) {
+      if (!word || !isVoiceActive()) return;
+      try {
+        window.speechSynthesis.cancel(); // Não acumula fila: a carta nova manda
+        const utter = new SpeechSynthesisUtterance(word.toLowerCase());
+        utter.lang = 'pt-BR';
+        if (ttsVoice) utter.voice = ttsVoice;
+        utter.rate = 1.35;
+        utter.pitch = 1.1;
+        window.speechSynthesis.speak(utter);
+      } catch (e) {}
+    }
+
+    function setPref(key, value) {
+      localUser.prefs[key] = !!value;
+      // Modo difícil exige narração; desligar a narração desliga o modo difícil
+      if (key === 'hideWord' && value) localUser.prefs.voice = true;
+      if (key === 'voice' && !value) localUser.prefs.hideWord = false;
+      saveUserToStorage();
+      renderPrefControls();
+      updateHUD();
+      if (key === 'voice' && value) speakWord('taco');
+    }
+
+    function renderPrefControls() {
+      const voice = document.getElementById('pref-voice');
+      const hide = document.getElementById('pref-hideword');
+      if (!voice || !hide) return;
+      voice.checked = !!localUser.prefs.voice;
+      hide.checked = !!localUser.prefs.hideWord;
+      voice.disabled = hide.disabled = !TTS_SUPPORTED;
+      if (!TTS_SUPPORTED) {
+        document.getElementById('pref-hideword-sub').textContent = 'Seu navegador não tem voz sintetizada.';
+      }
     }
 
     function vibrate(pattern) {
@@ -1064,8 +1191,21 @@
         border: '#FF4D6D',
         textCol: 'text-white',
         svg: `<div class="text-6xl drop-shadow-[0_4px_0_rgba(0,0,0,0.8)]">🦫</div>`
+      },
+      // Carta-armadilha: parece especial, mas NÃO se bate. Quem bater leva o monte.
+      PREGUICA: {
+        id: 'PREGUICA',
+        label: 'PREGUIÇA!',
+        trap: true,
+        trapBadge: '🚫 NÃO BATA!',
+        icon: '🦥',
+        bg: 'from-[#14532D] via-[#3F6212] to-[#65A30D]',
+        border: '#FF4D6D',
+        textCol: 'text-white',
+        svg: `<div class="text-6xl drop-shadow-[0_4px_0_rgba(0,0,0,0.8)]">🦥</div>`
       }
     };
+    const TRAP_BOT_FALL_CHANCE = 0.15; // Chance de cada bot cair na armadilha
 
     const SEQUENCE = ['TACO', 'GATO', 'CABRA', 'QUEIJO', 'PIZZA'];
     const CHAOS_MODIFIERS = [
@@ -1083,9 +1223,11 @@
       { emoji: '💀', title: 'F NO CHAT!', sub: 'Reflexo foi de comes e bebes!' },
       { emoji: '🧀', title: 'QUEIJO MOFADO!', sub: 'Dormiu no ponto da batida!' },
       { emoji: '🎒', title: 'MOCHILA CHEIA!', sub: 'Ganhou um monte de recordação!' },
-      { emoji: '💥', title: 'QUEIMOU A LARGADA!', sub: 'Mãozinha apressada paga caro!' }
+      { emoji: '💥', title: 'QUEIMOU A LARGADA!', sub: 'Mãozinha apressada paga caro!' },
+      { emoji: '🦥', title: 'CAIU NA ARMADILHA!', sub: 'A preguiça mandou NÃO bater!' }
     ];
     const FALSE_START_MEME_INDEX = 5;
+    const TRAP_MEME_INDEX = 6;
 
     // Stickers permitidos (o host só repassa os que estão nesta lista)
     const STICKERS = {
@@ -1124,6 +1266,7 @@
       currentModifierId: 'NONE',
       winnerSlot: null,
       gameId: 0,          // Incrementa a cada partida: timers de partidas antigas viram no-op
+      playSeq: 0,         // Incrementa a cada carta jogada
       botTurnTimer: null,
       pendingTimers: []   // Todos os timeouts da partida (bots, resolução, desbloqueio)
     };
@@ -1260,6 +1403,7 @@
       document.getElementById('host-hint-text').textContent = 'Toque em slot vazio p/ adicionar bot';
       document.getElementById('room-status-badge').textContent = 'P2P PARTY GAME';
       setP2PStatus('bg-yellow-400', 'Pronto');
+      closeQrModal();
       renderRejoinOption();
     }
 
@@ -1649,8 +1793,45 @@
       showToast('Você saiu da sala.', 'border-coral');
     }
 
+    function getRoomLink() {
+      return `${window.location.origin}${window.location.pathname}#sala=${currentRoomCode}`;
+    }
+
+    function openQrModal() {
+      if (!currentRoomCode) return;
+      const box = document.getElementById('qr-code-box');
+      box.innerHTML = '';
+      document.getElementById('qr-room-code').textContent = currentRoomCode;
+
+      // Em localhost o link não abre em outro aparelho: avisa para usar o IP da rede
+      const isLocalhost = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
+      document.getElementById('qr-room-hint').textContent = isLocalhost
+        ? '⚠️ Endereço local: outro aparelho só abre se você acessar pelo IP da rede ou pelo GitHub Pages.'
+        : 'Ou digite o código em “Salas → Entrar com código”.';
+
+      if (typeof QRCode === 'undefined') {
+        // Biblioteca não carregou (offline/CDN): o código grande ainda serve
+        box.innerHTML = '<span class="text-[11px] font-bold text-slate-600 px-2">QR indisponível sem internet. Use o código abaixo.</span>';
+      } else {
+        new QRCode(box, {
+          text: getRoomLink(),
+          width: 184,
+          height: 184,
+          colorDark: '#0F111A',
+          colorLight: '#FFFFFF',
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      }
+      document.getElementById('qr-modal').classList.remove('hidden');
+      sfxPop();
+    }
+
+    function closeQrModal() {
+      document.getElementById('qr-modal').classList.add('hidden');
+    }
+
     function copyRoomLink() {
-      const url = `${window.location.origin}${window.location.pathname}#sala=${currentRoomCode}`;
+      const url = getRoomLink();
       if (navigator.clipboard) {
         navigator.clipboard.writeText(url)
           .then(() => showToast('Link copiado! Envie aos amigos.', 'border-mint'))
@@ -1874,9 +2055,7 @@
           gameState.turnSlot = data.turnSlot;
           gameState.pileCount = data.pileCount;
           gameState.slots = data.slots || gameState.slots;
-          renderCardInCenter(card, getModifierById(gameState.currentModifierId));
-          sfxCardFlip(data.wordIndex);
-          updateHUD();
+          onCardRevealed(card, getModifierById(gameState.currentModifierId), data.wordIndex);
           updateOpponentsUI();
           setTurnUI();
           break;
@@ -2228,7 +2407,8 @@
       const spokenWord = SEQUENCE[gameState.wordIndex];
 
       const card = pickNextCard(spokenWord);
-      const modifier = card.special
+      gameState.playSeq++;
+      const modifier = (card.special || card.trap)
         ? CHAOS_MODIFIERS[0]
         : CHAOS_MODIFIERS[Math.floor(Math.random() * CHAOS_MODIFIERS.length)];
       gameState.currentCard = card;
@@ -2246,16 +2426,41 @@
         slots: getSanitizedSlots()
       });
 
-      renderCardInCenter(card, modifier);
-      sfxCardFlip(gameState.wordIndex);
-      updateHUD();
+      onCardRevealed(card, modifier, gameState.wordIndex);
       updateOpponentsUI();
 
-      const isMatch = (card.id === spokenWord) || Boolean(card.special);
+      // Armadilha nunca é gatilho: bater nela conta como queimada
+      const isMatch = !card.trap && ((card.id === spokenWord) || Boolean(card.special));
       if (isMatch) {
         activateTriggerEvent(card);
       } else {
+        if (card.trap) scheduleBotTrapFalls();
         advanceTurn();
+      }
+    }
+
+    // Host: alguns bots caem na armadilha e batem (queimada)
+    function scheduleBotTrapFalls() {
+      const seq = gameState.playSeq;
+      gameState.slots.forEach((s, idx) => {
+        if (!s.isBot || Math.random() >= TRAP_BOT_FALL_CHANCE) return;
+        gameTimeout(() => {
+          // Só vale se a armadilha ainda é a carta da mesa
+          if (gameState.playSeq !== seq || !gameState.slots[idx] || !gameState.slots[idx].isBot) return;
+          processSlap(idx);
+        }, 450 + Math.random() * 400);
+      });
+    }
+
+    // Host e cliente: tudo que acontece quando uma carta é revelada
+    function onCardRevealed(card, modifier, wordIndex) {
+      renderCardInCenter(card, modifier);
+      sfxCardFlip(wordIndex);
+      speakWord(SEQUENCE[wordIndex]);
+      updateHUD();
+      if (card.trap) {
+        vibrate([20, 30, 20]);
+        showToast('🦥 PREGUIÇA! NÃO BATA!', 'border-coral');
       }
     }
 
@@ -2280,6 +2485,8 @@
       } else if (roll < 0.44) {
         const specials = ['GORILA', 'NARVAL', 'MARMOTA'];
         return CARDS_DATA[specials[Math.floor(Math.random() * specials.length)]];
+      } else if (roll < 0.52) {
+        return CARDS_DATA.PREGUICA;
       } else {
         const others = SEQUENCE.filter(w => w !== spokenWord);
         return CARDS_DATA[others[Math.floor(Math.random() * others.length)]];
@@ -2526,7 +2733,8 @@
       if (gameState.pileCount <= 0 || !gameState.slots[slotIndex]) return;
       gameState.roundLocked = true;
       clearAllTimers();
-      executeResolvePileToLoser(slotIndex, FALSE_START_MEME_INDEX);
+      const fellInTrap = gameState.currentCard && gameState.currentCard.trap;
+      executeResolvePileToLoser(slotIndex, fellInTrap ? TRAP_MEME_INDEX : FALSE_START_MEME_INDEX);
     }
 
     function executeRegisterSlap(slotIndex, opts = {}) {
@@ -2774,9 +2982,12 @@
       const mySlot = gameState.slots[gameState.mySlotIndex];
       document.getElementById('player-count').textContent = mySlot ? mySlot.cardsCount : 10;
 
+      // Modo difícil: sem palavra escrita nem destaque na sequência — só o áudio
+      const hideWord = isHardModeActive();
+
       SEQUENCE.forEach((word, idx) => {
         const pill = document.getElementById(`seq-${idx}`);
-        if (idx === gameState.wordIndex) {
+        if (idx === gameState.wordIndex && !hideWord) {
           pill.className = 'seq-pill px-2.5 py-0.5 rounded-full text-[9px] font-extrabold tracking-wide bg-electric text-void border border-white scale-110 transition-all shadow';
         } else {
           pill.className = 'seq-pill px-2 py-0.5 rounded-full text-[9px] font-extrabold tracking-wide bg-surface text-slate-500 border border-slate-800 transition-all';
@@ -2784,7 +2995,9 @@
       });
 
       const spokenEl = document.getElementById('spoken-word');
-      if (gameState.wordIndex >= 0) {
+      if (gameState.wordIndex >= 0 && hideWord) {
+        spokenEl.textContent = '🔊 ???';
+      } else if (gameState.wordIndex >= 0) {
         spokenEl.textContent = SEQUENCE[gameState.wordIndex] + '!';
         spokenEl.classList.add('scale-110', 'text-electric');
         setTimeout(() => spokenEl.classList.remove('scale-110', 'text-electric'), 160);
@@ -2897,7 +3110,7 @@
         <div id="thrown-card" style="--card-rot: ${rot}deg; border-color: ${card.border};"
              class="animate-card-throw w-full h-full rounded-[26px] bg-gradient-to-br ${card.bg} border-4 neo-shadow flex flex-col items-center justify-between p-3 select-none ${modifier.class}">
           <div class="w-full flex items-center justify-between">
-            <span class="font-display font-bold text-[10px] px-2 py-0.5 rounded-lg bg-void/25 ${card.textCol}">${card.special ? 'ESPECIAL' : 'CARTA'}</span>
+            <span class="font-display font-bold text-[10px] px-2 py-0.5 rounded-lg bg-void/25 ${card.textCol}">${card.trap ? 'ARMADILHA' : (card.special ? 'ESPECIAL' : 'CARTA')}</span>
             <span class="font-display font-bold text-xs ${card.textCol}">★</span>
           </div>
 
@@ -2910,6 +3123,7 @@
               ${card.label}
             </div>
             ${card.special ? `<div class="text-[9px] font-extrabold bg-void/40 text-white rounded-full px-2 py-0.5 mt-0.5">${card.gestureBadge}</div>` : ''}
+            ${card.trap ? `<div class="text-[9px] font-extrabold bg-coral text-white rounded-full px-2 py-0.5 mt-0.5 animate-pulse">${card.trapBadge}</div>` : ''}
           </div>
         </div>
       `;
