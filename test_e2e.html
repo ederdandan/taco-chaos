@@ -84,7 +84,10 @@
       const name = String(raw || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 14);
       return name || 'Jogador';
     }
-    function sanitizeAvatar(raw) { return AVATAR_OPTIONS.includes(raw) ? raw : '😎'; }
+    const PHOTO_AVATAR_MAX_LEN = 12000;
+    const PHOTO_AVATAR_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
+    function isPhotoAvatar(value) { return typeof value === 'string' && value.length <= PHOTO_AVATAR_MAX_LEN && PHOTO_AVATAR_RE.test(value); }
+    function sanitizeAvatar(raw) { return AVATAR_OPTIONS.includes(raw) || isPhotoAvatar(raw) ? raw : '😎'; }
 
     // Cópia de pickNextCard (spokenWord = palavra desta jogada)
     function pickNextCard(spokenWord, rnd = Math.random) {
@@ -483,6 +486,11 @@
       assert(escapeHtml('<img src=x onerror="a()">') === '&lt;img src=x onerror=&quot;a()&quot;&gt;', 'TEST 28 (B6): escapeHtml neutralizes HTML');
       assert(sanitizeAvatar('<svg onload=x>') === '😎' && sanitizeName('  ') === 'Jogador' && sanitizeName('x'.repeat(40)).length === 14, 'TEST 29 (B6): Avatar/name are sanitized');
       assert(sanitizeRoomCode('ab<b>12') === 'ABB12', 'TEST 30 (B6): Room code from URL is sanitized');
+      const okPhoto = 'data:image/jpeg;base64,/9j/4AAQSkZJRg==';
+      assert(sanitizeAvatar(okPhoto) === okPhoto
+        && sanitizeAvatar('data:image/svg+xml;base64,PHN2Zz4=') === '😎'
+        && sanitizeAvatar('data:image/jpeg;base64,AAA" onerror="x') === '😎'
+        && sanitizeAvatar('data:image/jpeg;base64,' + 'A'.repeat(20000)) === '😎', 'TEST 30b: Photo avatar accepted only as small jpeg/png/webp data URL');
 
       // --- B7: batida com monte vazio não pune ---
       host.state.pileCount = 0;

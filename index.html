@@ -233,7 +233,7 @@
             👥
           </button>
           <button id="btn-user-profile" onclick="openProfileModal()" class="px-2 py-1 rounded-xl bg-cardbg border border-slate-700/80 text-xs font-bold text-slate-200 hover:bg-slate-700 transition flex items-center gap-1.5" title="Meu Perfil">
-            <span id="user-header-avatar">😎</span>
+            <span id="user-header-avatar" class="w-5 h-5 rounded-md overflow-hidden inline-flex items-center justify-center">😎</span>
             <span id="user-header-name" class="max-w-[70px] truncate text-[11px]">Você</span>
           </button>
           <button id="btn-sound" onclick="toggleSound()" class="p-1.5 rounded-xl bg-cardbg border border-slate-700/80 text-slate-200 hover:bg-slate-700 transition text-xs font-semibold" title="Alternar Som">
@@ -344,7 +344,7 @@
         <div class="flex items-center justify-between gap-2">
           <!-- Player Card Counter -->
           <div class="bg-surface border border-slate-800 rounded-2xl px-2.5 py-1.5 flex items-center gap-2">
-            <div id="player-avatar-hud" class="w-8 h-8 rounded-xl bg-mint/20 border border-mint/50 flex items-center justify-center text-sm">😎</div>
+            <div id="player-avatar-hud" class="w-8 h-8 rounded-xl bg-mint/20 border border-mint/50 flex items-center justify-center text-sm overflow-hidden">😎</div>
             <div>
               <div id="player-name-hud" class="text-[9px] font-bold uppercase text-slate-400 truncate max-w-[65px]">Você</div>
               <div class="flex items-baseline gap-1">
@@ -519,9 +519,28 @@
           <input id="profile-name-input" type="text" maxlength="14" class="w-full bg-surface border border-slate-700 rounded-xl px-3 py-2.5 text-sm font-bold text-white focus:outline-none focus:border-electric">
         </div>
 
+        <!-- Foto de perfil (câmera ou galeria) -->
+        <div class="mb-4">
+          <label class="block text-[10px] font-bold uppercase text-slate-400 mb-2">Sua Foto</label>
+          <div class="flex items-center gap-3">
+            <div id="profile-photo-preview" class="w-16 h-16 rounded-2xl bg-surface border border-slate-700 ring-mint flex items-center justify-center text-3xl overflow-hidden shrink-0">😎</div>
+            <div class="flex-1 grid grid-cols-2 gap-2">
+              <label class="cursor-pointer text-center px-2 py-2 rounded-xl bg-cardbg border border-slate-700 text-xs font-bold text-slate-200 hover:bg-slate-700 transition">
+                📷 Câmera
+                <input id="profile-photo-camera" type="file" accept="image/*" capture="user" class="hidden" onchange="handleProfilePhotoInput(this)">
+              </label>
+              <label class="cursor-pointer text-center px-2 py-2 rounded-xl bg-cardbg border border-slate-700 text-xs font-bold text-slate-200 hover:bg-slate-700 transition">
+                🖼️ Galeria
+                <input id="profile-photo-gallery" type="file" accept="image/*" class="hidden" onchange="handleProfilePhotoInput(this)">
+              </label>
+              <button id="profile-photo-remove" type="button" onclick="removeProfilePhoto()" class="hidden col-span-2 text-[10px] font-bold text-slate-400 hover:text-coral transition">✕ Remover foto</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Avatar Selection Grid -->
         <div class="mb-4">
-          <label class="block text-[10px] font-bold uppercase text-slate-400 mb-2">Escolha seu Avatar</label>
+          <label class="block text-[10px] font-bold uppercase text-slate-400 mb-2">Ou escolha um Avatar</label>
           <div id="avatar-grid" class="grid grid-cols-6 gap-2 text-center text-2xl">
             <!-- Populated by JS -->
           </div>
@@ -648,6 +667,64 @@
     // 1. LOCAL USER ACCOUNT SYSTEM (100% LOCALSTORAGE)
     // =========================================================================
     const AVATAR_OPTIONS = ['😎', '⚡', '🐱', '🌮', '🍕', '👾', '🦄', '🦍', '🧙', '👑', '🦊', '🤖', '🦫', '🔥', '💀', '🤡', '🧀', '🚀'];
+
+    // Avatar com foto: JPEG pequeno (80x80) em data URL, viaja junto com os slots
+    const PHOTO_AVATAR_SIZE = 80;
+    const PHOTO_AVATAR_MAX_LEN = 12000;
+    const PHOTO_AVATAR_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
+
+    function isPhotoAvatar(value) {
+      return typeof value === 'string' && value.length <= PHOTO_AVATAR_MAX_LEN && PHOTO_AVATAR_RE.test(value);
+    }
+
+    // HTML do avatar: <img> para foto, emoji escapado caso contrário.
+    // O container precisa ter tamanho fixo e overflow-hidden.
+    function avatarHtml(value) {
+      if (isPhotoAvatar(value)) {
+        return `<img src="${value}" alt="" draggable="false" class="w-full h-full object-cover">`;
+      }
+      return escapeHtml(value);
+    }
+
+    function setAvatarEl(el, value) {
+      if (el) el.innerHTML = avatarHtml(value);
+    }
+
+    // Lê a imagem escolhida (câmera ou galeria), recorta o centro em quadrado e reduz
+    function fileToPhotoAvatar(file) {
+      return new Promise((resolve, reject) => {
+        if (!file || !/^image\//.test(file.type || 'image/')) return reject(new Error('not-image'));
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const side = Math.min(img.naturalWidth, img.naturalHeight);
+            const sx = (img.naturalWidth - side) / 2;
+            const sy = (img.naturalHeight - side) / 2;
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = PHOTO_AVATAR_SIZE;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, PHOTO_AVATAR_SIZE, PHOTO_AVATAR_SIZE);
+            ctx.drawImage(img, sx, sy, side, side, 0, 0, PHOTO_AVATAR_SIZE, PHOTO_AVATAR_SIZE);
+            let quality = 0.8;
+            let data = canvas.toDataURL('image/jpeg', quality);
+            while (data.length > PHOTO_AVATAR_MAX_LEN && quality > 0.3) {
+              quality -= 0.15;
+              data = canvas.toDataURL('image/jpeg', quality);
+            }
+            if (!isPhotoAvatar(data)) return reject(new Error('too-big'));
+            resolve(data);
+          } catch (e) {
+            reject(e);
+          } finally {
+            URL.revokeObjectURL(url);
+          }
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode')); };
+        img.src = url;
+      });
+    }
     
     // Tab session ID to isolate tabs on the same computer during local testing
     let tabSessionId = '';
@@ -699,7 +776,7 @@
             ...localUser,
             ...parsed,
             name: String(parsed.name || 'Jogador').slice(0, 14),
-            avatar: AVATAR_OPTIONS.includes(parsed.avatar) ? parsed.avatar : '😎',
+            avatar: sanitizeAvatar(parsed.avatar),
             stats: { matches: 0, wins: 0, slaps: 0, ...(parsed.stats || {}) },
             prefs: { ...DEFAULT_PREFS, ...(parsed.prefs || {}) }
           };
@@ -723,9 +800,9 @@
     }
 
     function updateHeaderUserUI() {
-      document.getElementById('user-header-avatar').textContent = localUser.avatar;
+      setAvatarEl(document.getElementById('user-header-avatar'), localUser.avatar);
       document.getElementById('user-header-name').textContent = localUser.name;
-      document.getElementById('player-avatar-hud').textContent = localUser.avatar;
+      setAvatarEl(document.getElementById('player-avatar-hud'), localUser.avatar);
       document.getElementById('player-name-hud').textContent = localUser.name;
     }
 
@@ -750,7 +827,7 @@
     function applyProfileModalMode() {
       document.getElementById('profile-modal-title').textContent = loginMode ? 'Bem-vindo! 👋' : 'Minha Conta Local';
       document.getElementById('profile-modal-desc').textContent = loginMode
-        ? 'Escolha seu nome e avatar para entrar. Fica salvo neste aparelho, sem senha.'
+        ? 'Escolha seu nome e uma foto ou avatar para entrar. Fica salvo neste aparelho, sem senha.'
         : 'Seu perfil fica salvo no navegador deste aparelho. Sem senhas ou cadastros externos.';
       document.getElementById('profile-modal-close').classList.toggle('hidden', loginMode);
       document.getElementById('profile-save-btn').textContent = loginMode ? 'ENTRAR NO JOGO' : 'SALVAR PERFIL';
@@ -773,6 +850,12 @@
 
     // Redesenha só a grade (não apaga o nome que está sendo digitado)
     function renderAvatarGrid() {
+      // Prévia da foto (ou do emoji escolhido)
+      const hasPhoto = isPhotoAvatar(pendingAvatar);
+      setAvatarEl(document.getElementById('profile-photo-preview'), pendingAvatar || localUser.avatar);
+      document.getElementById('profile-photo-preview').classList.toggle('ring-2', hasPhoto);
+      document.getElementById('profile-photo-remove').classList.toggle('hidden', !hasPhoto);
+
       const grid = document.getElementById('avatar-grid');
       grid.innerHTML = '';
       AVATAR_OPTIONS.forEach(emoji => {
@@ -785,6 +868,24 @@
         };
         grid.appendChild(btn);
       });
+    }
+
+    // Input de câmera/galeria: converte a foto e deixa pendente até salvar
+    async function handleProfilePhotoInput(input) {
+      const file = input.files && input.files[0];
+      input.value = ''; // Permite escolher a mesma foto de novo
+      if (!file) return;
+      try {
+        pendingAvatar = await fileToPhotoAvatar(file);
+        renderAvatarGrid();
+      } catch (e) {
+        showToast('Não deu para usar essa foto 😕', 'border-coral');
+      }
+    }
+
+    function removeProfilePhoto() {
+      pendingAvatar = AVATAR_OPTIONS[0];
+      renderAvatarGrid();
     }
 
     function closeProfileModal() {
@@ -1255,7 +1356,7 @@
     }
 
     function sanitizeAvatar(raw) {
-      return AVATAR_OPTIONS.includes(raw) ? raw : '😎';
+      return AVATAR_OPTIONS.includes(raw) || isPhotoAvatar(raw) ? raw : '😎';
     }
 
     function setP2PStatus(colorClass, text, pulse = false) {
@@ -2103,8 +2204,8 @@
           card.className = `bg-surface border-2 ${isMe ? 'border-mint' : 'border-slate-800'} rounded-2xl p-2.5 flex items-center justify-between transition-all`;
           card.innerHTML = `
             <div class="flex items-center gap-2 min-w-0">
-              <div class="w-9 h-9 rounded-xl ${slot.isBot ? 'bg-violet/20 border border-violet' : 'bg-cyan/20 border border-cyan'} flex items-center justify-center text-lg shrink-0">
-                ${escapeHtml(slot.avatar)}
+              <div class="w-9 h-9 rounded-xl ${slot.isBot ? 'bg-violet/20 border border-violet' : 'bg-cyan/20 border border-cyan'} flex items-center justify-center text-lg shrink-0 overflow-hidden">
+                ${avatarHtml(slot.avatar)}
               </div>
               <div class="min-w-0">
                 <div class="flex items-center gap-1">
@@ -2641,7 +2742,7 @@
       badge.style.cssText = `--slap-rot: ${rot}deg; transform: translate(${offsetX}px, ${offsetY}px); border-color: ${color};`;
       badge.className = `animate-slap absolute px-3 py-1.5 rounded-2xl bg-void/95 border-2 shadow-2xl flex items-center gap-1.5 ${missed ? 'opacity-70' : ''}`;
       badge.innerHTML = `
-        <span class="text-lg">${escapeHtml(slot.avatar)}</span>
+        <span class="text-lg w-7 h-7 rounded-lg overflow-hidden inline-flex items-center justify-center shrink-0">${avatarHtml(slot.avatar)}</span>
         <div class="text-left">
           <div class="text-[11px] font-extrabold text-white leading-none">${escapeHtml(slot.name)}</div>
           <div class="text-[9px] font-bold" style="color: ${color}">${missed ? '😴 não bateu' : `${rank}º a bater`}</div>
@@ -2902,8 +3003,8 @@
         const box = document.createElement('div');
         box.className = `bg-surface border ${isTurn ? 'border-electric bg-electric/10 ring-2 ring-electric/30' : 'border-slate-800'} rounded-2xl p-1.5 flex items-center gap-1.5 transition-all`;
         box.innerHTML = `
-          <div class="w-7 h-7 rounded-xl ${op.isBot ? 'bg-violet/20 border border-violet/40' : 'bg-cyan/20 border border-cyan/40'} flex items-center justify-center text-xs shrink-0">
-            ${escapeHtml(op.avatar)}
+          <div class="w-7 h-7 rounded-xl ${op.isBot ? 'bg-violet/20 border border-violet/40' : 'bg-cyan/20 border border-cyan/40'} flex items-center justify-center text-xs shrink-0 overflow-hidden">
+            ${avatarHtml(op.avatar)}
           </div>
           <div class="min-w-0 flex-1">
             <div class="text-[10px] font-bold text-slate-200 truncate flex items-center gap-1">
