@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#191C2B"/>
+      <stop offset="100%" stop-color="#090A0F"/>
+    </radialGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF4D6D"/>
+      <stop offset="50%" stop-color="#8338EC"/>
+      <stop offset="100%" stop-color="#FFD60A"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="url(#bg)"/>
+  <rect x="24" y="24" width="464" height="464" rx="104" fill="none" stroke="url(#glow)" stroke-width="16"/>
+  <!-- Taco Shell -->
+  <path d="M120 330 C120 180, 392 180, 392 330 Z" fill="#F4A261" stroke="#0F111A" stroke-width="18" stroke-linejoin="round"/>
+  <!-- Lettuce -->
+  <path d="M140 315 C165 245, 215 255, 240 310 C270 245, 330 250, 355 310" fill="none" stroke="#06D6A0" stroke-width="24" stroke-linecap="round"/>
+  <!-- Tomatoes -->
+  <circle cx="210" cy="290" r="16" fill="#FF4D6D"/>
+  <circle cx="280" cy="275" r="16" fill="#FF4D6D"/>
+  <circle cx="330" cy="295" r="16" fill="#FF4D6D"/>
+  <!-- Taco base border -->
+  <path d="M115 330 Q256 365 397 330" fill="none" stroke="#0F111A" stroke-width="18" stroke-linecap="round"/>
+  <!-- Lightning bolt for Chaos -->
+  <polygon points="275,70 220,190 285,190 240,300 335,160 270,160" fill="#FFD60A" stroke="#0F111A" stroke-width="10" stroke-linejoin="round"/>
+</svg>
