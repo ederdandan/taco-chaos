@@ -71,6 +71,7 @@
     const AVATAR_OPTIONS = ['😎', '⚡', '🐱', '🌮', '🍕', '👾', '🦄', '🦍', '🧙', '👑', '🦊', '🤖', '🦫', '🔥', '💀', '🤡', '🧀', '🚀'];
     const STICKERS = { '🌮': 'Taco!', '🔥': 'Fogo!' };
     const RESOLVE_TIMEOUT_MS = 2800, ROUND_UNLOCK_MS = 1600, RESOLVE_DELAY_MS = 850;
+    const MIN_REACTION_MS = 100, MAX_NETWORK_GRACE_MS = 500, REACTION_JITTER_MS = 80;
     const FALSE_START_MEME_INDEX = 5;
     const TRAP_MEME_INDEX = 6;
 
@@ -99,6 +100,13 @@
       return others[Math.floor(rnd() * others.length)];
     }
 
+    // Cópia de computeSlapRanking
+    function computeSlapRanking(order) {
+      const hit = order.filter(s => !s.missed).sort((a, b) => a.reactionMs - b.reactionMs);
+      const miss = order.filter(s => s.missed);
+      return hit.concat(miss).map((s, i) => ({ slotIndex: s.slotIndex, rank: i + 1, missed: s.missed, reactionMs: s.missed ? null : Math.round(s.reactionMs) }));
+    }
+
     // =========================================================================
     // HOST (cópia do motor do index.html, sem DOM)
     // =========================================================================
@@ -108,7 +116,8 @@
           isHost: true, running: false, mySlotIndex: 0, gameId: 0,
           slots: [{ id: 'host', userId: hostUserId, name: 'Host', avatar: '😎', isBot: false, isHost: true, cardsCount: 10, conn: null }],
           turnSlot: 0, wordIndex: -1, pileCount: 0, currentCardId: null,
-          isTriggerActive: false, roundLocked: false, slapOrder: [], winnerSlot: null
+          isTriggerActive: false, roundLocked: false, slapOrder: [], winnerSlot: null,
+          triggerStartedAt: 0, pings: []
         },
         pendingTimers: [], botTurnTimer: null,
         nextCard: null,       // Teste pode forçar a próxima carta
@@ -159,10 +168,22 @@
         if (data.type === 'PLAYER_PLAY_CARD') {
           if (S.running && S.turnSlot === slotIndex && !S.roundLocked && !S.isTriggerActive) H.playCard(slotIndex);
         } else if (data.type === 'PLAYER_SLAP') {
-          H.processSlap(slotIndex);
+          H.processSlap(slotIndex, data.reactionMs);
         } else if (data.type === 'SEND_STICKER') {
           if (STICKERS[data.emoji]) H.broadcast({ type: 'STICKER_BROADCAST', slotIndex, emoji: data.emoji });
+        } else if (data.type === 'PONG') {
+          const sample = clock.now - Number(data.t);
+          if (Number.isFinite(sample) && sample >= 0 && sample < 10000) {
+            const slot = S.slots[slotIndex];
+            slot.rtt = (typeof slot.rtt === 'number') ? slot.rtt * 0.7 + sample * 0.3 : sample;
+          }
         }
+      };
+
+      // Cópia do PING do startHostHeartbeat (sem a detecção de silêncio)
+      H.ping = () => {
+        S.pings = S.slots.map(s => (s.conn && typeof s.rtt === 'number') ? Math.round(s.rtt) : null);
+        H.broadcast({ type: 'PING', t: clock.now, pings: S.pings });
       };
 
       H.profileUpdate = (slotIndex, data) => {
@@ -252,8 +273,8 @@
         const cardId = H.nextCard ? H.nextCard(spoken) : pickNextCard(spoken, H.rng);
         S.currentCardId = cardId;
         S.turnSlot = (S.turnSlot + 1) % S.slots.length;
-        H.broadcast({ type: 'CARD_PLAYED', cardId, modifierId: 'NONE', wordIndex: S.wordIndex, turnSlot: S.turnSlot, pileCount: S.pileCount, slots: H.sanitizedSlots() });
         const isMatch = cardId !== TRAP && (cardId === spoken || SPECIALS.includes(cardId));
+        H.broadcast({ type: 'CARD_PLAYED', cardId, modifierId: 'NONE', wordIndex: S.wordIndex, turnSlot: S.turnSlot, pileCount: S.pileCount, counts: S.slots.map(s => s.cardsCount), trigger: isMatch });
         if (isMatch) H.activateTrigger(cardId); else H.advanceTurn();
       };
 
@@ -276,9 +297,23 @@
       H.activateTrigger = (cardId) => {
         S.isTriggerActive = true;
         S.slapOrder = [];
-        H.broadcast({ type: 'TRIGGER_ACTIVATED', cardId });
+        S.triggerStartedAt = clock.now;
         S.slots.forEach((s, idx) => { if (s.isBot) H.scheduleBotSlap(idx); });
-        H.gameTimeout(H.resolveMissingSlaps, RESOLVE_TIMEOUT_MS);
+        const worstRtt = S.slots.reduce((m, s) => (s.conn && !s.isBot && typeof s.rtt === 'number') ? Math.max(m, s.rtt) : m, 0);
+        H.gameTimeout(H.resolveMissingSlaps, RESOLVE_TIMEOUT_MS + Math.min(worstRtt, MAX_NETWORK_GRACE_MS));
+      };
+
+      // Cópia de computeReactionMs (host = slot 0)
+      H.computeReactionMs = (slotIndex, claimedMs) => {
+        const elapsed = Math.max(0, clock.now - S.triggerStartedAt);
+        const slot = S.slots[slotIndex];
+        if (!slot || slot.isBot) return elapsed;
+        const claimed = Number(claimedMs);
+        if (claimedMs === null || claimedMs === undefined || !Number.isFinite(claimed)) return elapsed;
+        if (slotIndex === S.mySlotIndex) return Math.min(Math.max(claimed, MIN_REACTION_MS), elapsed);
+        const rtt = typeof slot.rtt === 'number' ? slot.rtt : MAX_NETWORK_GRACE_MS;
+        const lower = Math.max(MIN_REACTION_MS, elapsed - rtt - REACTION_JITTER_MS);
+        return Math.min(Math.max(claimed, lower), elapsed);
       };
 
       H.scheduleBotSlap = (idx) => {
@@ -298,9 +333,9 @@
         missing.forEach(i => H.registerSlap(i, { missed: true }));
       };
 
-      H.processSlap = (slotIndex) => {
+      H.processSlap = (slotIndex, claimedReactionMs) => {
         if (!S.running || S.roundLocked) return;
-        if (S.isTriggerActive) H.registerSlap(slotIndex);
+        if (S.isTriggerActive) H.registerSlap(slotIndex, { reactionMs: H.computeReactionMs(slotIndex, claimedReactionMs) });
         else if (S.pileCount > 0) H.falseSlap(slotIndex);
       };
 
@@ -313,13 +348,18 @@
 
       H.registerSlap = (slotIndex, opts = {}) => {
         if (!S.isTriggerActive || S.roundLocked || !S.slots[slotIndex] || H.hasSlapped(slotIndex)) return;
-        const rank = S.slapOrder.length + 1;
-        S.slapOrder.push({ slotIndex, rank, missed: !!opts.missed });
-        H.broadcast({ type: 'SLAP_STAMP', slotIndex, rank, missed: !!opts.missed });
+        const missed = !!opts.missed;
+        const reactionMs = missed ? null : (typeof opts.reactionMs === 'number' ? opts.reactionMs : H.computeReactionMs(slotIndex, null));
+        S.slapOrder.push({ slotIndex, missed, reactionMs });
+        H.broadcast({ type: 'SLAP_STAMP', slotIndex, missed });
         if (S.slapOrder.length >= S.slots.length) {
           H.clearAllTimers();
           S.roundLocked = true;
-          const loser = S.slapOrder[S.slapOrder.length - 1].slotIndex;
+          const ranking = computeSlapRanking(S.slapOrder);
+          S.slapOrder = ranking;
+          H.lastRanking = ranking;
+          H.broadcast({ type: 'SLAP_RESULT', ranking });
+          const loser = ranking[ranking.length - 1].slotIndex;
           H.gameTimeout(() => H.resolvePile(loser, 0), RESOLVE_DELAY_MS);
         }
       };
@@ -354,15 +394,17 @@
     function createClient(conn, userId, tabSessionId) {
       const C = {
         conn, userId, tabSessionId, kickedReason: null, stickers: [],
-        state: { running: false, mySlotIndex: -1, slots: [], turnSlot: 0, wordIndex: -1, pileCount: 0, currentCardId: null, isTriggerActive: false, roundLocked: false, winnerSlot: null, mySlapped: false }
+        state: { running: false, mySlotIndex: -1, slots: [], turnSlot: 0, wordIndex: -1, pileCount: 0, currentCardId: null, isTriggerActive: false, roundLocked: false, winnerSlot: null, mySlapped: false, triggerShownAt: 0, pings: [], ranking: null }
       };
       const S = C.state;
       C.apply = (sync) => {
+        const was = S.isTriggerActive;
         Object.assign(S, {
           running: !!sync.running, turnSlot: sync.turnSlot, wordIndex: sync.wordIndex, pileCount: sync.pileCount,
           currentCardId: sync.currentCardId, isTriggerActive: !!sync.isTriggerActive, roundLocked: !!sync.roundLocked,
           winnerSlot: typeof sync.winnerSlot === 'number' ? sync.winnerSlot : null, slots: sync.slots || []
         });
+        if (S.isTriggerActive && !was) S.triggerShownAt = clock.now;
       };
       conn.on('data', (d) => {
         if (typeof d.yourSlotIndex === 'number') S.mySlotIndex = d.yourSlotIndex;
@@ -370,9 +412,16 @@
           case 'JOIN_ACCEPTED': case 'RECONNECT_SUCCESS': case 'GAME_STARTED': case 'ROUND_RESOLVED': case 'ROUND_UNLOCKED':
             C.apply(d.fullState); break;
           case 'ROOM_UPDATE': S.slots = d.slots; break;
+          case 'PING':
+            conn.send({ type: 'PONG', t: d.t });
+            if (Array.isArray(d.pings)) S.pings = d.pings;
+            break;
           case 'CARD_PLAYED':
-            Object.assign(S, { currentCardId: d.cardId, wordIndex: d.wordIndex, turnSlot: d.turnSlot, pileCount: d.pileCount, slots: d.slots }); break;
-          case 'TRIGGER_ACTIVATED': S.isTriggerActive = true; S.mySlapped = false; break;
+            Object.assign(S, { currentCardId: d.cardId, wordIndex: d.wordIndex, turnSlot: d.turnSlot, pileCount: d.pileCount });
+            if (Array.isArray(d.counts) && d.counts.length === S.slots.length) d.counts.forEach((c, i) => { S.slots[i].cardsCount = c; });
+            if (d.trigger) { S.isTriggerActive = true; S.mySlapped = false; S.ranking = null; S.triggerShownAt = clock.now; }
+            break;
+          case 'SLAP_RESULT': S.ranking = d.ranking; break;
           case 'GAME_OVER': C.apply(d.fullState); S.running = false; S.winnerSlot = d.winnerSlot; break;
           case 'STICKER_BROADCAST': C.stickers.push(d); break;
           case 'PLAYER_DISCONNECTED': case 'PLAYER_RECONNECTED': if (d.slots) S.slots = d.slots; break;
@@ -385,9 +434,10 @@
       // Cópia de handleLocalSlap: uma batida por gatilho; sem gatilho só se houver monte
       C.slap = () => {
         if (!S.running || S.roundLocked) return;
+        const reactionMs = S.isTriggerActive ? Math.round(clock.now - S.triggerShownAt) : null;
         if (S.isTriggerActive) { if (S.mySlapped) return; S.mySlapped = true; }
         else if (S.pileCount <= 0) return;
-        conn.send({ type: 'PLAYER_SLAP' });
+        conn.send({ type: 'PLAYER_SLAP', reactionMs });
       };
       return C;
     }
@@ -588,6 +638,51 @@
       const alone = createHost('solo_host');
       alone.start();
       assert(alone.state.slots.length === 2 && alone.state.running === true && alone.state.slots[1].isBot, 'TEST 48: Host alone clicking Iniciar gets an auto bot');
+
+      // --- Justiça na batida: ranking por tempo de reação, não por chegada ---
+      const fh = createHost('fair_host');
+      const fc = connectClient(fh, 'fair_client', 'tab_f', 'Fair');
+      fh.start();
+      fh.nextCard = (spoken) => spoken;
+      fh.state.slots[1].rtt = 250; // cliente com 250ms de RTT
+      fh.playCard(0);
+      assert(fc.state.isTriggerActive && fh.state.isTriggerActive, 'TEST 49: Trigger travels inside CARD_PLAYED (no separate TRIGGER_ACTIVATED)');
+      assert(fc.state.slots[0].cardsCount === 9 && fc.state.slots[1].cardsCount === 10, 'TEST 50: CARD_PLAYED updates card counts without sending full slots');
+      clock.tick(300);
+      fh.processSlap(0, 300);                         // host reage em 300ms (sem rede)
+      clock.tick(150);                                // batida do cliente chega 450ms após o envio
+      fc.conn.send({ type: 'PLAYER_SLAP', reactionMs: 200 }); // mas ele reagiu em 200ms
+      assert(fh.lastRanking && fh.lastRanking[0].slotIndex === 1 && fh.lastRanking[1].slotIndex === 0,
+        'TEST 51: Faster client beats the host even though its slap arrived later');
+      assert(fc.state.ranking && fc.state.ranking[0].reactionMs === 200 && fc.state.ranking[1].reactionMs === 300, 'TEST 52: Client receives SLAP_RESULT with reaction times');
+      clock.tick(RESOLVE_DELAY_MS + 10);
+      assert(fh.events[fh.events.length - 1].loserIdx === 0, 'TEST 53: Slower host takes the pile');
+      clock.tick(ROUND_UNLOCK_MS + 10);
+
+      // Anti-trapaça: cliente diz 10ms, mas a batida chegou 1000ms depois com RTT 100
+      fh.state.slots[1].rtt = 100;
+      fh.nextCard = (spoken) => spoken;
+      fh.state.turnSlot = 0; fh.playCard(0);
+      clock.tick(300);
+      fh.processSlap(0, 300);
+      clock.tick(700);
+      fc.conn.send({ type: 'PLAYER_SLAP', reactionMs: 10 });
+      assert(fh.lastRanking[0].slotIndex === 0 && fh.lastRanking[1].reactionMs === 820, 'TEST 54: Fake low reaction time is clamped to (arrival - RTT - jitter)');
+      clock.tick(RESOLVE_DELAY_MS + ROUND_UNLOCK_MS + 20);
+
+      // Ping: eco do PONG mede o RTT e todos recebem a tabela
+      fh.ping();
+      fh.ping();
+      assert(typeof fh.state.slots[1].rtt === 'number' && Array.isArray(fc.state.pings) && fc.state.pings.length === 2 && fc.state.pings[0] === null,
+        'TEST 55: PING/PONG measures RTT and broadcasts the ping table');
+
+      // Prazo de quem não bateu ganha a folga do pior RTT (limitada)
+      fh.state.slots[1].rtt = 2000;
+      fh.state.turnSlot = 0; fh.nextCard = (spoken) => spoken; fh.playCard(0);
+      clock.tick(RESOLVE_TIMEOUT_MS + 10);
+      assert(fh.state.isTriggerActive && !fh.state.roundLocked, 'TEST 56: Missing-slap deadline is extended by the remote RTT');
+      clock.tick(MAX_NETWORK_GRACE_MS);
+      assert(fh.state.roundLocked, 'TEST 57: Grace is capped at MAX_NETWORK_GRACE_MS');
 
       // Render results to DOM
       const passedCount = results.filter(r => r.pass).length;
