@@ -1348,6 +1348,9 @@
       winnerSlot: null,
       gameId: 0,          // Incrementa a cada partida: timers de partidas antigas viram no-op
       playSeq: 0,         // Incrementa a cada carta jogada
+      triggerStartedAt: 0, // Host: performance.now() em que o gatilho foi enviado
+      triggerShownAt: 0,   // Local: performance.now() em que o gatilho apareceu na tela
+      pings: [],           // RTT (ms) host↔slot, por índice de slot
       botTurnTimer: null,
       pendingTimers: []   // Todos os timeouts da partida (bots, resolução, desbloqueio)
     };
@@ -1379,6 +1382,12 @@
     const RESOLVE_TIMEOUT_MS = 2800;
     const ROUND_UNLOCK_MS = 1600;
     const RESOLVE_DELAY_MS = 850;
+    // Justiça na batida: a ordem é decidida pelo TEMPO DE REAÇÃO medido em cada
+    // aparelho (carta na tela → toque), não pela ordem de chegada no host.
+    // Sem isso o host, que não passa pela rede, ganha ~1 RTT de vantagem.
+    const MIN_REACTION_MS = 100;        // Mais rápido que isso é chute/antecipação
+    const MAX_NETWORK_GRACE_MS = 500;   // Tolerância extra no prazo para clientes remotos
+    const REACTION_JITTER_MS = 80;      // Folga do limite inferior anti-trapaça
 
     // Default Bots Palette & Names
     const BOT_PRESETS = [
@@ -1408,6 +1417,7 @@
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' },
           { urls: 'stun:global.stun.twilio.com:3478' }
         ]
       }
@@ -1701,7 +1711,10 @@
         gameState.slots
           .filter(s => s.conn && now - (s.lastSeen || now) > HEARTBEAT_TIMEOUT_MS)
           .forEach(s => handleClientDisconnection(s.conn));
-        broadcastToClients({ type: 'PING' });
+        // O PING leva a hora do host (eco no PONG → RTT) e os RTTs medidos de todos
+        gameState.pings = gameState.slots.map(s => (s.conn && typeof s.rtt === 'number') ? Math.round(s.rtt) : null);
+        broadcastToClients({ type: 'PING', t: performance.now(), pings: gameState.pings });
+        if (gameState.running) updateOpponentsUI();
       }, HEARTBEAT_MS);
     }
 
@@ -1973,11 +1986,17 @@
           executePlayCard(slotIndex);
         }
       } else if (data.type === 'PLAYER_SLAP') {
-        processSlap(slotIndex);
+        processSlap(slotIndex, data.reactionMs);
       } else if (data.type === 'SEND_STICKER') {
         relaySticker(slotIndex, data.emoji);
+      } else if (data.type === 'PONG') {
+        // Além do lastSeen (feito acima), mede o RTT com média móvel
+        const sample = performance.now() - Number(data.t);
+        if (Number.isFinite(sample) && sample >= 0 && sample < 10000) {
+          const slot = gameState.slots[slotIndex];
+          slot.rtt = (typeof slot.rtt === 'number') ? slot.rtt * 0.7 + sample * 0.3 : sample;
+        }
       }
-      // 'PONG' só atualiza lastSeen (feito acima)
     }
 
     function handleProfileUpdate(slotIndex, data) {
@@ -2082,7 +2101,11 @@
 
       switch (data.type) {
         case 'PING':
-          safeSend(clientConnection, { type: 'PONG' });
+          safeSend(clientConnection, { type: 'PONG', t: data.t });
+          if (Array.isArray(data.pings)) {
+            gameState.pings = data.pings;
+            if (gameState.running) updateOpponentsUI();
+          }
           break;
 
         case 'JOIN_ACCEPTED':
@@ -2137,28 +2160,34 @@
           gameState.wordIndex = data.wordIndex;
           gameState.turnSlot = data.turnSlot;
           gameState.pileCount = data.pileCount;
-          gameState.slots = data.slots || gameState.slots;
+          // Só as contagens de cartas (pacote leve); os slots não mudam durante a partida
+          if (Array.isArray(data.counts) && data.counts.length === gameState.slots.length) {
+            data.counts.forEach((c, i) => { gameState.slots[i].cardsCount = c; });
+          }
           onCardRevealed(card, getModifierById(gameState.currentModifierId), data.wordIndex);
+          // O gatilho vem no mesmo pacote da carta: um único instante de "carta na tela"
+          if (data.trigger) {
+            gameState.isTriggerActive = true;
+            gameState.slapOrder = [];
+            gameState.mySlappedThisRound = false;
+            activateTriggerEventVisuals(card);
+            markTriggerShown();
+          }
           updateOpponentsUI();
           setTurnUI();
           break;
         }
 
-        case 'TRIGGER_ACTIVATED': {
-          const card = getCardById(data.cardId);
-          if (!card) break;
-          gameState.isTriggerActive = true;
-          gameState.currentCard = card;
-          gameState.slapOrder = [];
-          gameState.mySlappedThisRound = false;
-          activateTriggerEventVisuals(card);
-          setTurnUI();
-          break;
-        }
-
         case 'SLAP_STAMP':
-          gameState.slapOrder.push({ slotIndex: data.slotIndex, rank: data.rank, missed: !!data.missed });
-          renderSlapStamp(data.slotIndex, data.rank, !!data.missed);
+          // Provisório: a posição final só sai no SLAP_RESULT
+          gameState.slapOrder.push({ slotIndex: data.slotIndex, missed: !!data.missed });
+          renderSlapStamp(data.slotIndex, null, !!data.missed);
+          break;
+
+        case 'SLAP_RESULT':
+          if (!Array.isArray(data.ranking)) break;
+          gameState.slapOrder = data.ranking;
+          renderSlapRanking(data.ranking);
           break;
 
         case 'ROUND_RESOLVED':
@@ -2244,6 +2273,7 @@
 
     function applySyncedState(sync) {
       if (!sync) return;
+      const wasTriggerActive = gameState.isTriggerActive;
       gameState.running = !!sync.running;
       gameState.turnSlot = sync.turnSlot;
       gameState.wordIndex = sync.wordIndex;
@@ -2255,6 +2285,7 @@
       gameState.winnerSlot = (typeof sync.winnerSlot === 'number') ? sync.winnerSlot : null;
       gameState.slots = sync.slots || [];
       if (!gameState.isTriggerActive) gameState.gestureCompleted = true;
+      else if (!wasTriggerActive) markTriggerShown(); // Reconexão no meio de um gatilho
       updateHUD();
       updateOpponentsUI();
       setTurnUI();
@@ -2498,6 +2529,10 @@
 
       gameState.turnSlot = (gameState.turnSlot + 1) % gameState.slots.length;
 
+      // Armadilha nunca é gatilho: bater nela conta como queimada
+      const isMatch = !card.trap && ((card.id === spokenWord) || Boolean(card.special));
+
+      // Envia antes de renderizar: a rede é o caminho mais lento
       broadcastToClients({
         type: 'CARD_PLAYED',
         cardId: card.id,
@@ -2505,14 +2540,13 @@
         wordIndex: gameState.wordIndex,
         turnSlot: gameState.turnSlot,
         pileCount: gameState.pileCount,
-        slots: getSanitizedSlots()
+        counts: gameState.slots.map(s => s.cardsCount),
+        trigger: isMatch
       });
 
       onCardRevealed(card, modifier, gameState.wordIndex);
       updateOpponentsUI();
 
-      // Armadilha nunca é gatilho: bater nela conta como queimada
-      const isMatch = !card.trap && ((card.id === spokenWord) || Boolean(card.special));
       if (isMatch) {
         activateTriggerEvent(card);
       } else {
@@ -2597,10 +2631,11 @@
       gameState.slapOrder = [];
       gameState.gestureTaps = 0;
       gameState.mySlappedThisRound = false;
-
-      broadcastToClients({ type: 'TRIGGER_ACTIVATED', cardId: card.id });
+      gameState.triggerStartedAt = performance.now();
+      // (O aviso aos clientes já foi no CARD_PLAYED, com trigger: true)
 
       activateTriggerEventVisuals(card);
+      markTriggerShown();
       setTurnUI();
 
       // Bots batem com atraso humano (720ms - 1500ms)
@@ -2608,8 +2643,38 @@
         if (s.isBot) scheduleBotSlap(idx);
       });
 
-      // Quem não bater a tempo é registrado como "não bateu"
-      gameTimeout(resolveMissingSlaps, RESOLVE_TIMEOUT_MS);
+      // Quem não bater a tempo é registrado como "não bateu".
+      // Clientes remotos veem a carta RTT/2 depois e a batida leva mais RTT/2: ganham a folga do pior RTT.
+      const worstRtt = gameState.slots.reduce((m, s) => (s.conn && !s.isBot && typeof s.rtt === 'number') ? Math.max(m, s.rtt) : m, 0);
+      gameTimeout(resolveMissingSlaps, RESOLVE_TIMEOUT_MS + Math.min(worstRtt, MAX_NETWORK_GRACE_MS));
+    }
+
+    // Marca o instante em que o gatilho aparece na tela (host e cliente medem igual).
+    // O rAF roda logo antes da pintura do quadro que mostra a carta.
+    let triggerMarkSeq = 0;
+    function markTriggerShown() {
+      const seq = ++triggerMarkSeq;
+      gameState.triggerShownAt = performance.now();
+      requestAnimationFrame(() => {
+        if (seq === triggerMarkSeq && !gameState.mySlappedThisRound) gameState.triggerShownAt = performance.now();
+      });
+    }
+
+    // Host: tempo de reação "oficial" de um slot, com limites anti-trapaça.
+    // Para cliente remoto: o host sabe que a batida chegou `elapsed` ms após o envio,
+    // então a reação real está entre (elapsed - RTT) e elapsed.
+    function computeReactionMs(slotIndex, claimedMs) {
+      const elapsed = Math.max(0, performance.now() - gameState.triggerStartedAt);
+      const slot = gameState.slots[slotIndex];
+      if (!slot || slot.isBot) return elapsed;
+      const claimed = Number(claimedMs);
+      if (!Number.isFinite(claimed)) return elapsed;
+      if (slotIndex === gameState.mySlotIndex) {
+        return Math.min(Math.max(claimed, MIN_REACTION_MS), elapsed); // Toque local, sem rede
+      }
+      const rtt = typeof slot.rtt === 'number' ? slot.rtt : MAX_NETWORK_GRACE_MS;
+      const lower = Math.max(MIN_REACTION_MS, elapsed - rtt - REACTION_JITTER_MS);
+      return Math.min(Math.max(claimed, lower), elapsed);
     }
 
     function scheduleBotSlap(idx) {
@@ -2660,8 +2725,13 @@
 
     // ----- Entrada: toque, swipes e teclado -----
     const centerZone = document.getElementById('center-pile-zone');
-    let suppressClickUntil = 0;
     let swipeStart = null;
+
+    function hasPendingSwipeGesture() {
+      if (!gameState.isTriggerActive || gameState.gestureCompleted || !gameState.currentCard) return false;
+      const g = gameState.currentCard.gestureType;
+      return g === 'swipe' || g === 'swipe_down';
+    }
 
     function onArenaTap() {
       if (!gameState.running || gameState.roundLocked) return;
@@ -2686,24 +2756,25 @@
       handleLocalSlap();
     }
 
-    centerZone.addEventListener('click', () => {
-      if (Date.now() < suppressClickUntil) return; // Clique gerado pelo fim de um swipe
-      onArenaTap();
-    });
-
-    // Swipe para cima (Narval) ou para baixo (Marmota) com dedo ou mouse
+    // A batida sai no pointerdown (encostou o dedo), sem esperar o 'click' do soltar,
+    // que custa ~50-150ms. Com swipe pendente (Narval/Marmota) espera o gesto no pointerup.
     centerZone.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
       swipeStart = { x: e.clientX, y: e.clientY, t: Date.now() };
+      if (!hasPendingSwipeGesture()) onArenaTap();
     });
+    // Swipe para cima (Narval) ou para baixo (Marmota) com dedo ou mouse
     centerZone.addEventListener('pointerup', (e) => {
       if (!swipeStart) return;
       const dx = e.clientX - swipeStart.x;
       const dy = e.clientY - swipeStart.y;
       const dt = Date.now() - swipeStart.t;
       swipeStart = null;
+      if (!hasPendingSwipeGesture()) return; // Toque já tratado no pointerdown
       if (Math.abs(dy) > 40 && Math.abs(dy) > Math.abs(dx) && dt < 800) {
-        suppressClickUntil = Date.now() + 400;
         triggerGestureAction(dy < 0 ? 'swipe' : 'swipe_down');
+      } else {
+        onArenaTap(); // Toque simples com swipe pendente: mostra a dica do gesto
       }
     });
     centerZone.addEventListener('pointercancel', () => { swipeStart = null; });
@@ -2749,6 +2820,7 @@
 
     function handleLocalSlap() {
       if (!gameState.running || gameState.roundLocked) return;
+      const reactionMs = gameState.isTriggerActive ? Math.round(performance.now() - gameState.triggerShownAt) : null;
 
       if (gameState.isTriggerActive) {
         if (gameState.mySlappedThisRound) return; // Uma batida por rodada
@@ -2760,17 +2832,17 @@
       }
 
       if (gameState.isHost) {
-        processSlap(gameState.mySlotIndex);
+        processSlap(gameState.mySlotIndex, reactionMs);
       } else if (clientConnection && clientConnection.open) {
-        clientConnection.send({ type: 'PLAYER_SLAP' });
+        clientConnection.send({ type: 'PLAYER_SLAP', reactionMs });
       }
     }
 
     // Host: batida válida (com gatilho) ou queimada (sem gatilho e com monte)
-    function processSlap(slotIndex) {
+    function processSlap(slotIndex, claimedReactionMs) {
       if (!gameState.isHost || !gameState.running || gameState.roundLocked) return;
       if (gameState.isTriggerActive) {
-        executeRegisterSlap(slotIndex);
+        executeRegisterSlap(slotIndex, { reactionMs: computeReactionMs(slotIndex, claimedReactionMs) });
       } else if (gameState.pileCount > 0) {
         executeFalseSlap(slotIndex);
       }
@@ -2789,27 +2861,53 @@
       if (!gameState.isHost || !gameState.isTriggerActive || gameState.roundLocked) return;
       if (!gameState.slots[slotIndex] || hasSlapped(slotIndex)) return;
 
-      const rank = gameState.slapOrder.length + 1;
       const missed = Boolean(opts.missed);
-      gameState.slapOrder.push({ slotIndex, rank, missed });
+      // Bots (e quem não passou por processSlap) contam do envio do gatilho até agora
+      const reactionMs = missed ? null
+        : (typeof opts.reactionMs === 'number' ? opts.reactionMs : computeReactionMs(slotIndex, null));
+      gameState.slapOrder.push({ slotIndex, missed, reactionMs });
 
-      broadcastToClients({ type: 'SLAP_STAMP', slotIndex, rank, missed });
-      renderSlapStamp(slotIndex, rank, missed);
+      // Carimbo provisório: a posição só é decidida quando todos baterem
+      broadcastToClients({ type: 'SLAP_STAMP', slotIndex, missed });
+      renderSlapStamp(slotIndex, null, missed);
 
-      // Todos registrados: o último leva o monte
+      // Todos registrados: ordena por tempo de reação e o último leva o monte
       if (gameState.slapOrder.length >= gameState.slots.length) {
         clearAllTimers();
         gameState.roundLocked = true;
-        const loserSlotIdx = gameState.slapOrder[gameState.slapOrder.length - 1].slotIndex;
+        const ranking = computeSlapRanking(gameState.slapOrder);
+        gameState.slapOrder = ranking;
+        broadcastToClients({ type: 'SLAP_RESULT', ranking });
+        renderSlapRanking(ranking);
+        const loserSlotIdx = ranking[ranking.length - 1].slotIndex;
         const memeIndex = Math.floor(Math.random() * FALSE_START_MEME_INDEX); // Exclui "queimou a largada"
         gameTimeout(() => executeResolvePileToLoser(loserSlotIdx, memeIndex), RESOLVE_DELAY_MS);
       }
     }
 
-    function renderSlapStamp(slotIndex, rank, missed) {
+    // Quem bateu, do mais rápido ao mais lento (empate: ordem de chegada);
+    // quem não bateu vai ao fim, na ordem já sorteada em resolveMissingSlaps.
+    function computeSlapRanking(order) {
+      const hit = order.filter(s => !s.missed).sort((a, b) => a.reactionMs - b.reactionMs);
+      const miss = order.filter(s => s.missed);
+      return hit.concat(miss).map((s, i) => ({
+        slotIndex: s.slotIndex,
+        rank: i + 1,
+        missed: s.missed,
+        reactionMs: s.missed ? null : Math.round(s.reactionMs)
+      }));
+    }
+
+    function renderSlapRanking(ranking) {
+      document.getElementById('slap-hands-layer').innerHTML = '';
+      ranking.forEach(r => renderSlapStamp(r.slotIndex, r.rank, !!r.missed, r.reactionMs, true));
+    }
+
+    // rank null = carimbo provisório ("bateu!"); silent = re-render do resultado, sem som
+    function renderSlapStamp(slotIndex, rank, missed, reactionMs = null, silent = false) {
       const slot = gameState.slots[slotIndex];
       if (!slot) return;
-      if (!missed) {
+      if (!missed && !silent) {
         sfxSlap();
         vibrate(40);
       }
@@ -2827,7 +2925,7 @@
         <span class="text-lg w-7 h-7 rounded-lg overflow-hidden inline-flex items-center justify-center shrink-0">${avatarHtml(slot.avatar)}</span>
         <div class="text-left">
           <div class="text-[11px] font-extrabold text-white leading-none">${escapeHtml(slot.name)}</div>
-          <div class="text-[9px] font-bold" style="color: ${color}">${missed ? '😴 não bateu' : `${rank}º a bater`}</div>
+          <div class="text-[9px] font-bold" style="color: ${color}">${missed ? '😴 não bateu' : (rank ? `${Number(rank)}º · ${Number(reactionMs) || 0}ms` : '✋ bateu!')}</div>
         </div>
       `;
       layer.appendChild(badge);
@@ -3080,8 +3178,18 @@
       `;
       container.appendChild(pileBox);
 
+      // Ping exibido: para o host, o de cada cliente; para o cliente, a caixa do host mostra o próprio link
+      const pingFor = (op) => {
+        if (!gameState.isMultiplayer || op.isBot) return null;
+        const idx = op.isHost ? gameState.mySlotIndex : op.slotIndex;
+        const v = gameState.pings[idx];
+        return (typeof v === 'number') ? v : null;
+      };
+
       opponents.forEach(op => {
         const isTurn = gameState.running && gameState.turnSlot === op.slotIndex;
+        const ping = pingFor(op);
+        const pingColor = ping === null ? '' : ping < 80 ? 'text-mint' : ping < 180 ? 'text-yellow-400' : 'text-coral';
         const box = document.createElement('div');
         box.className = `bg-surface border ${isTurn ? 'border-electric bg-electric/10 ring-2 ring-electric/30' : 'border-slate-800'} rounded-2xl p-1.5 flex items-center gap-1.5 transition-all`;
         box.innerHTML = `
@@ -3096,6 +3204,7 @@
             <div class="flex items-center gap-1">
               <span class="text-[9px] text-slate-400">Cartas:</span>
               <span class="text-[11px] font-display font-bold text-cyan">${Number(op.cardsCount) || 0}</span>
+              ${ping !== null ? `<span class="text-[8px] font-mono ${pingColor} ml-auto">${Number(ping)}ms</span>` : ''}
             </div>
           </div>
         `;

@@ -13,7 +13,7 @@ TACO! GATO! CHAOS! — a P2P party reflex game (2–6 players) shipped as a stat
 - Invite links use `#sala=<CODE>`. On load, the page auto-switches to the lobby and joins.
 - Tests: open `test_e2e.html` in a browser. Results render on the page and in the console (`PASS:`/`FAIL:`). There is no CLI runner.
 - **Important:** `test_e2e.html` does not load `index.html`. It holds its own copies of the host/client message handlers, `getTableOverlayHtml` and a `MockConnection` pair that links two in-memory peers. Changes to game or protocol logic in `index.html` must be mirrored by hand in the test file, or the tests will pass against stale logic.
-- After changing cached assets, bump `CACHE_NAME` in `sw.js` (currently `taco-chaos-v7`). Navigations are network-first, but other assets are cache-first and keep old versions until the bump.
+- After changing cached assets, bump `CACHE_NAME` in `sw.js` (currently `taco-chaos-v8`). Navigations are network-first, but other assets are cache-first and keep old versions until the bump.
 
 ## Architecture
 
@@ -30,11 +30,12 @@ Nearly everything lives in `index.html` (~2400 lines): Tailwind via CDN (theme t
 ### Message types actually used
 The implementation diverges from the table in `SPEC.md` section 3. Trust the code:
 - Client to host: `JOIN_OR_RECONNECT` (from an already-seated connection it only updates name/avatar), `PLAYER_PLAY_CARD`, `PLAYER_SLAP`, `SEND_STICKER`, `PONG`
-- Host to clients: `JOIN_ACCEPTED`, `RECONNECT_SUCCESS`, `ROOM_FULL`, `GAME_IN_PROGRESS`, `ROOM_CLOSED`, `ROOM_UPDATE`, `GAME_STARTED`, `CARD_PLAYED`, `TRIGGER_ACTIVATED`, `SLAP_STAMP`, `ROUND_RESOLVED`, `ROUND_UNLOCKED`, `GAME_OVER`, `STICKER_BROADCAST`, `PLAYER_DISCONNECTED`, `PLAYER_RECONNECTED`, `PING`
+- Host to clients: `JOIN_ACCEPTED`, `RECONNECT_SUCCESS`, `ROOM_FULL`, `GAME_IN_PROGRESS`, `ROOM_CLOSED`, `ROOM_UPDATE`, `GAME_STARTED`, `CARD_PLAYED` (carries `counts` and `trigger`), `SLAP_STAMP` (provisional), `SLAP_RESULT`, `ROUND_RESOLVED`, `ROUND_UNLOCKED`, `GAME_OVER`, `STICKER_BROADCAST`, `PLAYER_DISCONNECTED`, `PLAYER_RECONNECTED`, `PING`
 - The host never trusts a `slotIndex` from the client: it derives the slot from the connection. `broadcastToClients` adds the recipient's `yourSlotIndex` to every packet, so clients re-locate themselves when slots shift.
 - Cards, modifiers and memes travel as ids (`cardId`, `modifierId`, `memeIndex`) and are looked up in local tables. Never send HTML over the wire; escape names/avatars with `escapeHtml` before `innerHTML`.
 - Match timers go through `gameTimeout` (cancelled by `clearAllTimers`, ignored after `gameId` changes). `teardownSession` must run before starting solo, creating or joining a room.
-- Heartbeat: host `PING` every 2s; a client silent for 7s becomes a bot. Clients auto-reconnect up to 5 times with backoff.
+- Heartbeat: host `PING` every 2s carries `t` (echoed in `PONG` to measure per-slot `rtt`) and the `pings` table shown in the opponents bar; a client silent for 7s becomes a bot. Clients auto-reconnect up to 5 times with backoff.
+- Slap fairness: the slap order is decided by reaction time (`triggerShownAt` to tap, measured on each device), not by arrival at the host. Clients send `PLAYER_SLAP { reactionMs }`. `computeReactionMs` clamps it to `[elapsed - rtt - jitter, elapsed]`. When everyone has slapped, `computeSlapRanking` broadcasts `SLAP_RESULT`. The slap fires on `pointerdown`.
 
 ### Persistence
 The profile is stored in `localStorage` under key `taco_chaos_user`. See `initUserAccount` and `saveUserToStorage`.
