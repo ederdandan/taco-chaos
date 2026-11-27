@@ -1,4 +1,4 @@
-const CACHE_NAME = 'taco-chaos-v8';
+const CACHE_NAME = 'taco-chaos-v9';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -30,6 +30,8 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
+  // Métricas (GoatCounter): sempre pela rede, nunca no cache.
+  if (/goatcounter\.com|gc\.zgo\.at/.test(e.request.url)) return;
   // Only handle GET requests
   if (e.request.method !== 'GET') return;
 
